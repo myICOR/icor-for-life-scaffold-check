@@ -101,6 +101,36 @@ test('RED: the same file on the installed version is NOT a leftover', async () =
   assert.ok(!r.findings.some((x) => x.kind === 'leftover'), 'a removal in the installed version itself must not count');
 });
 
+test('RED: the scaffold\'s OLD bytes under a renamed path are a leftover; the user\'s own file under that name is not', async () => {
+  const OLD_GL = '---\nid: GL-001\n---\n# The six rooms (scaffold, old)\n';
+  const remote = remoteManifest({ history: [
+    { version: '1.5.0', date: '2026-09-01', removed: [], added: [], renamed: [
+      { from: '06 AI Team/AI Team Knowledge/Guidelines/GL-001-the-six-rooms.md', to: '06 AI Team/AI Team Knowledge/Guidelines/GL-1001-the-six-rooms.md', from_sha256: sha(OLD_GL) },
+    ] },
+  ] });
+  /* a) the member still has the scaffold's old GL-001, byte for byte */
+  let files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n';
+  files['06 AI Team/AI Team Knowledge/Guidelines/GL-001-the-six-rooms.md'] = OLD_GL;
+  let r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote, local: null, installedVersion: '1.4.2' });
+  let f = r.findings.find((x) => x.path.endsWith('GL-001-the-six-rooms.md'));
+  assert.ok(f && f.kind === 'leftover' && f.message.includes('renamed to'), 'old scaffold bytes must be a leftover');
+  /* b) the member's OWN GL-001 with the same name: theirs, a collision, never a leftover */
+  files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n';
+  files['06 AI Team/AI Team Knowledge/Guidelines/GL-001-the-six-rooms.md'] = '---\nid: GL-001\n---\n# My own naming guideline\n';
+  r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote, local: null, installedVersion: '1.4.2' });
+  f = r.findings.find((x) => x.path.endsWith('GL-001-the-six-rooms.md'));
+  assert.ok(f && f.kind === 'collision' && f.severity === 'info', 'the user\'s own file must be a collision, not a leftover');
+  assert.ok(!r.findings.some((x) => x.kind === 'leftover'));
+  /* the only attention item a 1.4.2 vault may carry here is the version gap itself */
+  assert.ok(r.findings.filter((x) => x.severity === 'attention').every((x) => x.kind === 'version'));
+});
+
+test('RED: a removed file with no hash in the manifest still matches by name (older manifests)', async () => {
+  const files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files['.obsidian/snippets/icor-rooms.css'] = 'anything';
+  const r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote: remoteManifest(), local: null, installedVersion: '1.4.2' });
+  assert.ok(r.findings.some((x) => x.kind === 'leftover'));
+});
+
 test('RED: a snippet enabled in appearance.json but gone from disk is attention', async () => {
   const files = cleanFiles();
   files['.obsidian/appearance.json'] = '{"enabledCssSnippets":["icor-rooms"]}';

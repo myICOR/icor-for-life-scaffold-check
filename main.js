@@ -72,8 +72,8 @@ function removalsSince(manifest, installed) {
   for (const h of manifest.history || []) {
     const after = installed ? compareVersions(h.version, installed) > 0 : true;
     if (!after) continue;
-    for (const r of h.removed || []) out.push({ path: r.path, note: r.note || '', version: h.version });
-    for (const r of h.renamed || []) out.push({ path: r.from, note: 'renamed to `' + r.to + '`', version: h.version });
+    for (const r of h.removed || []) out.push({ path: r.path, sha256: r.sha256 || '', note: r.note || '', version: h.version });
+    for (const r of h.renamed || []) out.push({ path: r.from, sha256: r.from_sha256 || '', note: 'renamed to `' + r.to + '`', version: h.version, to: r.to });
   }
   return out;
 }
@@ -154,12 +154,26 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
     }
   }
 
-  /* 4. leftovers: removed or moved upstream after your version, still here */
+  /* 4. leftovers: removed or moved upstream after your version, still here.
+     Matched by CONTENT when the manifest knows the old file's hash: a file
+     that shares the old name but not the old bytes is the user's own, and
+     is reported as a name collision, never as a leftover. */
   for (const r of removalsSince(remote, installed)) {
-    if (await fs.exists(r.path)) {
+    if (!(await fs.exists(r.path))) continue;
+    let same = true;
+    if (r.sha256) {
+      let have = null;
+      try { have = await hash(await fs.readBinary(r.path)); } catch (e) { have = null; }
+      same = have === r.sha256;
+    }
+    if (same) {
       add('leftover', 'attention', r.path,
         'Removed from the scaffold in ' + r.version + (r.note ? ': ' + r.note : '.'),
         'Delete it after reading the ' + r.version + ' changelog entry. Nothing in the scaffold reads it any more.', { since: r.version });
+    } else {
+      add('collision', 'info', r.path,
+        'Shares its name with a scaffold file that was ' + (r.to ? 'renamed to `' + r.to + '`' : 'removed') + ' in ' + r.version + ', but not its content, so it is yours.',
+        'Keep it. Nothing to do' + (r.to ? '; the scaffold\'s own document now lives at `' + r.to + '`.' : '.'), { since: r.version });
     }
   }
 
