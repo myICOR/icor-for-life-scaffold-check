@@ -1,0 +1,3 @@
+# Settings store; may hold a GitHub token for a private manifest URL. Never in git.
+data.json
+.DS_Store

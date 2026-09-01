@@ -1,0 +1,48 @@
+/* ICOR for Life - Scaffold Check.
+ * One status-bar item, one modal. Every colour rides an --ink-* token with an
+ * Obsidian fallback, so the INKLINE theme and any other theme both read. */
+
+.icor-scaffold-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  cursor: pointer;
+}
+
+.icor-scaffold-dot {
+  display: inline-block;
+  width: 0.55em;
+  height: 0.55em;
+  border-radius: 50%;
+  background: var(--ink-paper-faint, var(--text-faint));
+}
+.icor-scaffold-dot-ok        { background: var(--ink-success-dot, #7d9a7f); }
+.icor-scaffold-dot-attention { background: var(--ink-marker, #ff5a2d); }
+.icor-scaffold-dot-broken    { background: var(--ink-danger, var(--text-error, #c0392b)); }
+.icor-scaffold-dot-offline,
+.icor-scaffold-dot-unknown   { background: var(--ink-paper-faint, var(--text-faint)); }
+
+.icor-scaffold-modal .icor-scaffold-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-bottom: 0.25em;
+}
+.icor-scaffold-modal .icor-scaffold-meta {
+  color: var(--ink-paper-dim, var(--text-muted));
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.85em;
+}
+.icor-scaffold-modal ul { padding-left: 1.2em; }
+.icor-scaffold-modal li { margin: 0.25em 0; }
+.icor-scaffold-modal code { font-size: 0.9em; }
+.icor-scaffold-modal .icor-scaffold-foot {
+  display: flex;
+  gap: 0.5em;
+  margin-top: 1em;
+  border-top: 1px solid var(--ink-hairline, var(--background-modifier-border));
+  padding-top: 0.75em;
+}
