@@ -129,10 +129,11 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
   /* 3. canonical files: three-way */
   const localHashes = new Map((local && local.files || []).map((f) => [f.path, f.sha256]));
   for (const f of remote.files || []) {
+    const fk = { fileKind: f.kind || 'file' };
     const exists = await fs.exists(f.path);
     if (!exists) {
       if (f.example) continue; /* example notes are meant to be deleted */
-      add('file', 'attention', f.path, 'Canonical ' + f.kind + ' is missing.', 'Copy it in from the latest scaffold.', { since: null });
+      add('file', 'attention', f.path, 'Canonical ' + f.kind + ' is missing.', 'Copy it in from the latest scaffold.', fk);
       continue;
     }
     let have;
@@ -141,15 +142,15 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
     const installedHash = localHashes.get(f.path);
     if (installedHash && have === installedHash) {
       add('file', 'attention', f.path, 'Changed upstream since you installed; your copy is the version you started with.',
-        'Update it from the latest scaffold. Safe: you never edited it.');
+        'Update it from the latest scaffold. Safe: you never edited it.', fk);
     } else if (installedHash && installedHash !== f.sha256) {
       add('file', 'info', f.path, 'You edited this file, and it also changed upstream.',
-        'Keep yours. Compare against the latest scaffold by hand if you want the upstream change too. This check never overwrites an edited file.');
+        'Keep yours. Compare against the latest scaffold by hand if you want the upstream change too. This check never overwrites an edited file.', fk);
     } else if (installedHash) {
-      add('file', 'info', f.path, 'You edited this file.', 'Keep it. It is yours now.');
+      add('file', 'info', f.path, 'You edited this file.', 'Keep it. It is yours now.', fk);
     } else {
       add('file', 'info', f.path, 'Differs from the latest scaffold, and without your installed manifest the check cannot tell whether you changed it or the scaffold did.',
-        'Compare by hand, or add `.icor-for-life/manifest.json` from the version you installed so the next check can tell.');
+        'Compare by hand, or add `.icor-for-life/manifest.json` from the version you installed so the next check can tell.', fk);
     }
   }
 
@@ -253,10 +254,11 @@ function renderReport(result, opts) {
     /* Grouped by kind, so seventy missing files read as "6 guidelines, 13
        SOPs" with the list under each, rather than seventy lines. Order is
        the order the kinds first appear in, which is the manifest's order. */
+    const groupOf = (f) => (f.kind === 'file' ? f.fileKind || 'file' : f.kind);
     const kinds = [];
-    for (const f of rows) if (!kinds.includes(f.kind)) kinds.push(f.kind);
+    for (const f of rows) if (!kinds.includes(groupOf(f))) kinds.push(groupOf(f));
     for (const kind of kinds) {
-      const sub = rows.filter((f) => f.kind === kind);
+      const sub = rows.filter((f) => groupOf(f) === kind);
       if (kinds.length > 1) { L.push('### ' + kind + ' (' + sub.length + ')'); L.push(''); }
       for (const f of sub) {
         L.push('- **`' + f.path + '`** ' + f.message);
