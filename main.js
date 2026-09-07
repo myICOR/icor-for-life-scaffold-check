@@ -15,7 +15,12 @@
  *        - LEFTOVERS: files the scaffold removed or moved after your version
  *          that are still here, each with the changelog line that explains it;
  *        - structure: the rooms, the plugins the vault expects, every Base
- *          pointing at a folder that exists, every enabled snippet present.
+ *          pointing at a folder that exists, every enabled snippet present;
+ *        - AGENT IDENTITY: every agent contract carries a stable `myicor_id`
+ *          (scaffold 1.11.0); shipped agents are found by that id, so a
+ *          renamed agent is intact, not missing, and a contract without an
+ *          id, with a malformed or placeholder one, or sharing one with
+ *          another contract, is named.
  *   4. Writes the report as a note the user can act on, or hand to their AI.
  *
  * What it never does: it never changes a scaffold file. The only things it
@@ -78,12 +83,145 @@ function removalsSince(manifest, installed) {
   return out;
 }
 
+/* ---------------------------------------------- agent identities ----- */
+
+const AGENTS_DIR = '06 AI Team/Agents';
+const NIL_ID = '00000000-0000-0000-0000-000000000000';
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const MINT_FIX = 'Run the hiring SOP step (`uuidgen | tr A-Z a-z`, written as `myicor_id`) or `mint-agent-ids.py --map` with the scaffold\'s export. Never invent an id by hand and never copy another agent\'s.';
+
+/* The first `---` block of a note as { key: value }: top-level `key: value`
+   lines only, quotes and a trailing ` # comment` stripped, later keys win
+   as in YAML. Nothing nested, nothing multi-line: the identity fields are
+   flat scalars and this reader is all the plugin needs. A BOM, CRLF, and a
+   `---` in the body are all tolerated. No frontmatter, or an unterminated
+   block, is {}. */
+function readFrontmatter(text) {
+  const lines = String(text || '').replace(/^\uFEFF/, '').split(/\r?\n/);
+  if (lines[0] !== '---') return {};
+  const out = {};
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line === '---' || line === '...') return out;
+    const m = /^([A-Za-z0-9_][A-Za-z0-9_-]*):(?:\s+(.*))?$/.exec(line);
+    if (!m) continue;
+    let v = (m[2] || '').replace(/\s+#.*$/, '').trim();
+    if (v.length >= 2 && ((v[0] === '"' && v[v.length - 1] === '"') || (v[0] === "'" && v[v.length - 1] === "'"))) v = v.slice(1, -1);
+    out[m[1]] = v;
+  }
+  return {};
+}
+
+/* Templates carry the nil id on purpose: the placeholder plus a name that
+   starts with "Agent " (the shipped `Agent 01`) or "_" (a member's own). */
+function isTemplateName(name) {
+  return /^(Agent |_)/.test(String(name || ''));
+}
+
+/* Every `06 AI Team/Agents/<Name>/AGENT.md` as { path, folder, name, id },
+   where id is the raw frontmatter value (undefined when absent) and name
+   is the frontmatter `name` or, failing that, the folder. */
+async function readContracts(fs) {
+  const out = [];
+  for (const path of await fs.listAgentContracts()) {
+    let fm = {};
+    try { fm = readFrontmatter(await fs.read(path)); } catch (e) { fm = {}; }
+    const folder = path.split('/').slice(-2, -1)[0] || '';
+    out.push({ path, folder, name: fm.name || folder, id: fm.myicor_id });
+  }
+  return out;
+}
+
+/*
+ * checkAgents({ fs, remote, add })
+ *
+ * Rule 1, identity-aware matching of the manifest's shipped agents, and
+ * rule 2, the local health of every contract. Returns the set of canonical
+ * paths the file check must NOT report as missing, because the agent was
+ * found by id somewhere else (its contract, and its shim if one exists at
+ * another slug). A manifest without `agents` (older than 1.11.0) runs
+ * rule 2 only and says so once.
+ */
+async function checkAgents({ fs, remote, add }) {
+  const skipMissing = new Set();
+  const contracts = await readContracts(fs);
+  const claimed = new Set(); /* paths rule 1 already reported; rule 2 stays quiet on them */
+
+  const shipped = Array.isArray(remote.agents) ? remote.agents : null;
+  if (!shipped) {
+    add('agents', 'info', META_DIR + '/manifest.json',
+      'The latest manifest predates agent identities (no `agents` key), so shipped agents are matched by path only.',
+      'Nothing to do. A newer scaffold manifest names one id per shipped agent, and this check will then find a renamed agent by its id.');
+  } else {
+    for (const a of shipped) {
+      if (!a || typeof a !== 'object' || !a.myicor_id || !a.path) continue;
+      const hits = contracts.filter((c) => c.id === a.myicor_id);
+      const found = hits.find((c) => c.path === a.path) || hits[0];
+      if (found) {
+        if (found.path === a.path) continue; /* case a: the file rules apply, unchanged */
+        /* case b: same identity, the member's own name and folder */
+        add('agents', 'info', found.path,
+          'Shipped agent ' + a.name + ' lives at `' + found.path + '` under your name `' + found.folder + '`; identity intact.',
+          'Nothing to do. The scaffold tracks the id, not the folder name; updates to ' + a.name + ' apply to this file.');
+        skipMissing.add(a.path);
+        if (a.shim && !(await fs.exists(a.shim))) {
+          for (const sp of await fs.listShims()) {
+            let txt = '';
+            try { txt = await fs.read(sp); } catch (e) { txt = ''; }
+            if (txt.includes(found.path) || txt.includes(AGENTS_DIR + '/' + found.folder + '/')) { skipMissing.add(a.shim); break; }
+          }
+        }
+        continue;
+      }
+      /* case c: nothing carries the id, but something sits at the canonical path */
+      const atPath = contracts.find((c) => c.path === a.path);
+      if (atPath) {
+        claimed.add(atPath.path);
+        if (!atPath.id) {
+          add('agents', 'attention', a.path, 'Shipped agent ' + a.name + ' carries no myicor_id.',
+            'Run the hiring SOP step or `mint-agent-ids.py --map` with the scaffold\'s export, so ' + a.name + ' receives the id the scaffold knows it by: ' + a.myicor_id + '.');
+        } else {
+          add('agents', 'attention', a.path, '`' + a.path + '` is a different agent than the shipped ' + a.name + ' (different id); the shipped one is missing.',
+            'If this is your own agent, give it its own folder, then copy the shipped ' + a.name + ' in from the latest scaffold. Never change the id on either file to make them match.');
+        }
+      }
+      /* case d: found nowhere; the file check reports the canonical path missing, as before */
+    }
+  }
+
+  /* rule 2: every local contract, shipped or the member's own */
+  const byId = new Map();
+  for (const c of contracts) {
+    if (claimed.has(c.path)) continue;
+    if (!c.id) {
+      add('agents', 'attention', c.path, 'Agent contract carries no myicor_id.', MINT_FIX);
+    } else if (c.id === NIL_ID) {
+      if (!isTemplateName(c.name) && !isTemplateName(c.folder)) {
+        add('agents', 'attention', c.path, 'Carries the nil placeholder id but is not a template (templates are named `Agent ...` or start with `_`).', MINT_FIX);
+      }
+    } else if (!UUID_V4.test(c.id)) {
+      add('agents', 'attention', c.path, 'myicor_id `' + c.id + '` is not a lowercase UUID v4.',
+        'If this is a shipped agent, take its id from the scaffold\'s export via `mint-agent-ids.py --map`; otherwise mint a fresh one. Never guess a correction by hand.');
+    } else {
+      if (!byId.has(c.id)) byId.set(c.id, []);
+      byId.get(c.id).push(c.path);
+    }
+  }
+  for (const [id, paths] of byId) {
+    if (paths.length < 2) continue;
+    add('agents', 'broken', paths[0], 'Two contracts share one myicor_id `' + id + '`: ' + paths.map((p) => '`' + p + '`').join(' and ') + '.',
+      'One identity, one agent. Keep the id on the contract that was hired with it and mint a fresh id for the other; never reuse an id.');
+  }
+  return skipMissing;
+}
+
 /*
  * runChecks({ fs, hash, remote, local, installedVersion })
  *
  *   fs.exists(path) -> bool, fs.read(path) -> string, fs.readBinary(path)
  *   -> ArrayBuffer|Buffer, fs.listBases() -> [paths of every .base outside
- *   .obsidian]  (all async)
+ *   .obsidian], fs.listAgentContracts() -> [every 06 AI Team/Agents/<Name>/
+ *   AGENT.md], fs.listShims() -> [every .claude/agents/<slug>.md]  (all async)
  *   hash(bytes) -> hex sha256 (async)
  *   remote: the latest manifest (parsed). local: the vault's own manifest or
  *   null. installedVersion: the VERSION file's content or null.
@@ -126,13 +264,18 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
     }
   }
 
-  /* 3. canonical files: three-way */
+  /* 3. agent identities (before the files, because a shipped agent found by
+     its id under another name must not be reported missing below) */
+  const foundElsewhere = await checkAgents({ fs, remote, add });
+
+  /* 4. canonical files: three-way */
   const localHashes = new Map((local && local.files || []).map((f) => [f.path, f.sha256]));
   for (const f of remote.files || []) {
     const fk = { fileKind: f.kind || 'file' };
     const exists = await fs.exists(f.path);
     if (!exists) {
       if (f.example) continue; /* example notes are meant to be deleted */
+      if (foundElsewhere.has(f.path)) continue; /* the agent lives under the member's own name */
       add('file', 'attention', f.path, 'Canonical ' + f.kind + ' is missing.', 'Copy it in from the latest scaffold.', fk);
       continue;
     }
@@ -154,7 +297,7 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
     }
   }
 
-  /* 4. leftovers: removed or moved upstream after your version, still here.
+  /* 5. leftovers: removed or moved upstream after your version, still here.
      Matched by CONTENT when the manifest knows the old file's hash: a file
      that shares the old name but not the old bytes is the user's own, and
      is reported as a name collision, never as a leftover. */
@@ -177,7 +320,7 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
     }
   }
 
-  /* 5. bases: every Base in the vault points at a folder that exists */
+  /* 6. bases: every Base in the vault points at a folder that exists */
   for (const p of await fs.listBases()) {
     let txt = '';
     try { txt = await fs.read(p); } catch (e) { continue; }
@@ -189,7 +332,7 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
     }
   }
 
-  /* 6. plugins the vault expects */
+  /* 7. plugins the vault expects */
   let enabled = [];
   try { enabled = JSON.parse(await fs.read('.obsidian/community-plugins.json')); } catch (e) { enabled = []; }
   for (const id of remote.plugins || []) {
@@ -198,7 +341,7 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
     else if (!enabled.includes(id)) add('plugin', 'attention', '.obsidian/plugins/' + id, 'Plugin is installed but not enabled.', 'Enable it under Settings, Community plugins.');
   }
 
-  /* 7. snippets enabled but gone (the reverse of a leftover) */
+  /* 8. snippets enabled but gone (the reverse of a leftover) */
   let appearance = {};
   try { appearance = JSON.parse(await fs.read('.obsidian/appearance.json')); } catch (e) { appearance = {}; }
   for (const s of appearance.enabledCssSnippets || []) {
@@ -287,7 +430,7 @@ function renderReport(result, opts) {
   L.push('Paste this into your AI session to have the fixes done for you. Everything above is the input; nothing here changes a file on its own.');
   L.push('');
   L.push('```');
-  L.push('Read the Scaffold Check report at the path of this note. Fix every Broken item, then every Attention item, in order. Rules: never overwrite a file the report says I edited; for a leftover, delete it only after reading the changelog line the report cites; for a missing canonical file, copy it from the latest ICOR for Life Scaffold. Show me each change before you make it.');
+  L.push('Read the Scaffold Check report at the path of this note. Fix every Broken item, then every Attention item, in order. Rules: never overwrite a file the report says I edited; for a leftover, delete it only after reading the changelog line the report cites; for a missing canonical file, copy it from the latest ICOR for Life Scaffold; never change or reuse a `myicor_id`, an agent keeps its id for life. Show me each change before you make it.');
   L.push('```');
   L.push('');
   if (o.manifestUrl) {
@@ -297,7 +440,7 @@ function renderReport(result, opts) {
   return L.join('\n');
 }
 
-const engine = { parseVersion, compareVersions, baseFolders, removalsSince, runChecks, renderReport, META_DIR };
+const engine = { parseVersion, compareVersions, baseFolders, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4 };
 
 /* ======================================================= the plugin ===== */
 
@@ -331,6 +474,21 @@ if (obsidian) {
       read: (p) => adapter.read(normalizePath(p)),
       readBinary: (p) => adapter.readBinary(normalizePath(p)),
       listBases: async () => app.vault.getFiles().filter((f) => f.extension === 'base' && !f.path.startsWith('.obsidian/')).map((f) => f.path),
+      listAgentContracts: async () => {
+        const dir = normalizePath(AGENTS_DIR);
+        if (!(await adapter.exists(dir))) return [];
+        const out = [];
+        for (const folder of (await adapter.list(dir)).folders) {
+          const p = normalizePath(folder + '/AGENT.md');
+          if (await adapter.exists(p)) out.push(p);
+        }
+        return out;
+      },
+      listShims: async () => {
+        const dir = normalizePath('.claude/agents');
+        if (!(await adapter.exists(dir))) return [];
+        return (await adapter.list(dir)).files.filter((p) => p.endsWith('.md')).map((p) => normalizePath(p));
+      },
     };
   }
 

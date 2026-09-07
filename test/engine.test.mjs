@@ -31,11 +31,23 @@ function vault(files, folders = []) {
     read: async (p) => { if (!(p in files)) throw new Error('ENOENT ' + p); return files[p]; },
     readBinary: async (p) => Buffer.from(files[p]),
     listBases: async () => Object.keys(files).filter((p) => p.endsWith('.base') && !p.startsWith('.obsidian/')),
+    listAgentContracts: async () => Object.keys(files).filter((p) => /^06 AI Team\/Agents\/[^/]+\/AGENT\.md$/.test(p)),
+    listShims: async () => Object.keys(files).filter((p) => /^\.claude\/agents\/[^/]+\.md$/.test(p)),
   };
 }
 
 const GL006 = '---\ntype: guideline\n---\n# GL-006\n';
 const README = '# ICOR for Life Scaffold\n';
+
+/* The nine shipped agents' real ids (scaffold 1.11.0); three are enough. */
+const ID = { penn: 'd40ec637-e612-4baf-987c-a3ebb71a1536', larry: '9a23e8a4-8d9f-4893-bd91-0950f26015c9', pax: '7cb91c69-150c-46f0-ad78-eb2f7a220b80' };
+const NIL = '00000000-0000-0000-0000-000000000000';
+const PENN_PATH = '06 AI Team/Agents/Penn/AGENT.md';
+const PENN_SHIM = '.claude/agents/penn.md';
+const contract = (name, id, extra = '') => '---\ntype: agent\n' + (id === undefined ? '' : 'myicor_id: ' + id + '\n') + 'name: ' + name + '\n' + extra + '---\n# ' + name + '\n';
+const shim = (path) => '---\nname: x\n---\nYour canonical contract is `' + path + '` at the vault root.\n';
+const PENN = contract('Penn', ID.penn);
+const PENN_SHIM_TEXT = shim(PENN_PATH);
 
 function remoteManifest(extra = {}) {
   return Object.assign({
@@ -45,7 +57,10 @@ function remoteManifest(extra = {}) {
       { path: 'README.md', sha256: sha(README), kind: 'doc', example: false },
       { path: '06 AI Team/AI Team Knowledge/Guidelines/GL-006-bases-and-live-views.md', sha256: sha(GL006), kind: 'guideline', example: false },
       { path: '04 Inner World/Contacts/People/Alex Rivera.md', sha256: sha('example'), kind: 'doc', example: true },
+      { path: PENN_PATH, sha256: sha(PENN), kind: 'agent', example: false },
+      { path: PENN_SHIM, sha256: sha(PENN_SHIM_TEXT), kind: 'shim', example: false },
     ],
+    agents: [{ name: 'Penn', myicor_id: ID.penn, path: PENN_PATH, shim: PENN_SHIM }],
     bases: [],
     history: [
       { version: '1.5.0', date: '2026-09-01', removed: [{ path: '.obsidian/snippets/icor-rooms.css', note: 'moved into the theme' }], renamed: [], added: [] },
@@ -57,6 +72,8 @@ function remoteManifest(extra = {}) {
 const cleanFiles = () => ({
   'README.md': README,
   '06 AI Team/AI Team Knowledge/Guidelines/GL-006-bases-and-live-views.md': GL006,
+  [PENN_PATH]: PENN,
+  [PENN_SHIM]: PENN_SHIM_TEXT,
   '.icor-for-life/VERSION': '1.5.0\n',
   '.obsidian/community-plugins.json': '["icor-for-life-connect"]',
   '.obsidian/plugins/icor-for-life-connect/manifest.json': '{}',
@@ -67,9 +84,9 @@ const cleanFolders = ['04 Inner World/Journal', '06 AI Team/Agents'];
 /* ------------------------------------------------------------- RED ---- */
 
 test('RED: a missing required folder is broken', async () => {
-  const r = await engine.runChecks({ fs: vault(cleanFiles(), ['04 Inner World/Journal']), hash, remote: remoteManifest(), local: null, installedVersion: '1.5.0' });
+  const r = await engine.runChecks({ fs: vault(cleanFiles(), ['06 AI Team/Agents']), hash, remote: remoteManifest(), local: null, installedVersion: '1.5.0' });
   assert.equal(r.health, 'broken');
-  assert.ok(r.findings.some((f) => f.kind === 'room' && f.path === '06 AI Team/Agents'));
+  assert.ok(r.findings.some((f) => f.kind === 'room' && f.path === '04 Inner World/Journal'));
 });
 
 test('RED: a Base filtering on a folder that does not exist is broken', async () => {
@@ -235,13 +252,183 @@ test('baseFolders reads every inFolder filter once', () => {
 
 test('renderReport carries the numbers in frontmatter and every finding in the body', async () => {
   const files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files['.obsidian/snippets/icor-rooms.css'] = '';
-  const r = await engine.runChecks({ fs: vault(files, ['04 Inner World/Journal']), hash, remote: remoteManifest(), local: null, installedVersion: '1.4.2' });
+  const r = await engine.runChecks({ fs: vault(files, ['06 AI Team/Agents']), hash, remote: remoteManifest(), local: null, installedVersion: '1.4.2' });
   const md = engine.renderReport(r, { now: new Date('2026-09-01T10:00:00Z'), manifestUrl: 'https://example.test/m.json' });
   assert.ok(md.startsWith('---\ntype: scaffold-check\ndate: 2026-09-01\nhealth: broken\n'));
   assert.ok(md.includes('installed_version: 1.4.2'));
   assert.ok(md.includes('## Broken (1)'));
-  assert.ok(md.includes('`06 AI Team/Agents`'));
+  assert.ok(md.includes('`04 Inner World/Journal`'));
   assert.ok(md.includes('`.obsidian/snippets/icor-rooms.css`'));
   assert.ok(md.includes('## For your AI'));
   assert.ok(!md.includes('—'), 'no em dashes in generated prose');
+});
+
+/* ------------------------------------------------- agent identities ---- */
+/* Scaffold 1.11.0: every contract carries a stable `myicor_id`. The manifest
+   names each shipped agent's id, so a renamed agent is found by identity,
+   not by folder name. The red cases come first. */
+
+const run = (files, opts = {}) => engine.runChecks(Object.assign({ fs: vault(files, cleanFolders), hash, remote: remoteManifest(), local: null, installedVersion: '1.5.0' }, opts));
+const agentFindings = (r) => r.findings.filter((x) => x.kind === 'agents');
+
+test('RED 1c: the shipped agent at its canonical path with NO myicor_id is attention, with the fix, and reported once', async () => {
+  const files = cleanFiles(); files[PENN_PATH] = contract('Penn', undefined);
+  const r = await run(files);
+  const a = agentFindings(r);
+  assert.equal(a.length, 1, 'one finding for one defect, not one per rule');
+  assert.equal(a[0].severity, 'attention');
+  assert.equal(a[0].path, PENN_PATH);
+  assert.ok(a[0].message.includes('Shipped agent Penn carries no myicor_id'));
+  assert.ok(a[0].action.includes('mint-agent-ids.py --map'));
+  assert.equal(r.health, 'attention');
+});
+
+test('RED 1c: a DIFFERENT id at the shipped agent\'s canonical path means the shipped one is missing', async () => {
+  const files = cleanFiles(); files[PENN_PATH] = contract('Penn', ID.pax);
+  const r = await run(files);
+  const a = agentFindings(r);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].severity, 'attention');
+  assert.ok(a[0].message.includes('is a different agent than the shipped Penn'));
+  assert.ok(a[0].message.includes('the shipped one is missing'));
+});
+
+test('RED 1b: the shipped agent found by id under another name is info, and neither the canonical contract nor its shim is reported missing', async () => {
+  const files = cleanFiles();
+  delete files[PENN_PATH]; delete files[PENN_SHIM];
+  files['06 AI Team/Agents/Nancy/AGENT.md'] = contract('Nancy', ID.penn);
+  files['.claude/agents/nancy.md'] = shim('06 AI Team/Agents/Nancy/AGENT.md');
+  const r = await run(files);
+  const a = agentFindings(r);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].severity, 'info');
+  assert.equal(a[0].path, '06 AI Team/Agents/Nancy/AGENT.md');
+  assert.ok(a[0].message.includes('Shipped agent Penn lives at') && a[0].message.includes('Nancy') && a[0].message.includes('identity intact'));
+  assert.ok(!r.findings.some((x) => x.kind === 'file' && x.path === PENN_PATH), 'the canonical path must not be reported missing');
+  assert.ok(!r.findings.some((x) => x.kind === 'file' && x.path === PENN_SHIM), 'the shim at another slug must not be reported missing');
+  assert.equal(r.health, 'ok');
+});
+
+test('RED 1b: renamed agent, but the shim is gone everywhere: the shim IS still reported missing', async () => {
+  const files = cleanFiles();
+  delete files[PENN_PATH]; delete files[PENN_SHIM];
+  files['06 AI Team/Agents/Nancy/AGENT.md'] = contract('Nancy', ID.penn);
+  const r = await run(files);
+  assert.ok(!r.findings.some((x) => x.kind === 'file' && x.path === PENN_PATH));
+  assert.ok(r.findings.some((x) => x.kind === 'file' && x.path === PENN_SHIM && x.severity === 'attention'));
+});
+
+test('RED 1d: a shipped agent found nowhere is the existing missing-file finding, and nothing else', async () => {
+  const files = cleanFiles(); delete files[PENN_PATH];
+  const r = await run(files);
+  const f = r.findings.find((x) => x.kind === 'file' && x.path === PENN_PATH);
+  assert.ok(f && f.severity === 'attention' && f.message.includes('missing'));
+  assert.equal(agentFindings(r).length, 0);
+});
+
+test('RED 1a: the shipped agent at its canonical path with its id is no identity finding; the file rules alone apply', async () => {
+  const files = cleanFiles(); files[PENN_PATH] = PENN + '\nMy own addition.\n';
+  const local = { version: '1.5.0', files: [{ path: PENN_PATH, sha256: sha(PENN) }] };
+  const r = await run(files, { local });
+  assert.equal(agentFindings(r).length, 0);
+  const f = r.findings.find((x) => x.kind === 'file' && x.path === PENN_PATH);
+  assert.ok(f && f.severity === 'info' && f.message.includes('You edited'));
+});
+
+test('RED 2: the member\'s own contract with no myicor_id is attention with the fix', async () => {
+  const files = cleanFiles(); files['06 AI Team/Agents/Kaspar/AGENT.md'] = contract('Kaspar', undefined);
+  const r = await run(files);
+  const a = agentFindings(r);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].severity, 'attention');
+  assert.equal(a[0].path, '06 AI Team/Agents/Kaspar/AGENT.md');
+  assert.ok(a[0].message.includes('no myicor_id'));
+  assert.ok(a[0].action.includes('mint-agent-ids.py'));
+});
+
+test('RED 2: a malformed id (not a lowercase UUID v4) is attention', async () => {
+  for (const bad of ['D40EC637-E612-4BAF-987C-A3EBB71A1536', 'd40ec637-e612-1baf-987c-a3ebb71a1536', 'kaspar-1', '"d40ec637-e612-4baf-987c-a3ebb71a153"']) {
+    const files = cleanFiles(); files['06 AI Team/Agents/Kaspar/AGENT.md'] = contract('Kaspar', bad);
+    const r = await run(files);
+    const a = agentFindings(r);
+    assert.equal(a.length, 1, 'malformed ' + bad);
+    assert.equal(a[0].severity, 'attention');
+    assert.ok(a[0].message.includes('not a lowercase UUID v4'), bad);
+  }
+});
+
+test('RED 2: the nil placeholder on a contract that is not a template is attention; on a template it is fine', async () => {
+  const files = cleanFiles();
+  files['06 AI Team/Agents/Kaspar/AGENT.md'] = contract('Kaspar', NIL);
+  files['06 AI Team/Agents/Agent 01/AGENT.md'] = contract('Agent 01', NIL + '  # placeholder: the hiring SOP mints the real id');
+  files['06 AI Team/Agents/_template/AGENT.md'] = contract('_template', NIL);
+  const r = await run(files);
+  const a = agentFindings(r);
+  assert.equal(a.length, 1);
+  assert.equal(a[0].path, '06 AI Team/Agents/Kaspar/AGENT.md');
+  assert.equal(a[0].severity, 'attention');
+  assert.ok(a[0].message.includes('placeholder'));
+});
+
+test('RED 2: two contracts sharing one id is broken, naming both paths, once', async () => {
+  const files = cleanFiles();
+  files['06 AI Team/Agents/Kaspar/AGENT.md'] = contract('Kaspar', ID.pax);
+  files['06 AI Team/Agents/Vita/AGENT.md'] = contract('Vita', ID.pax);
+  const r = await run(files);
+  const a = agentFindings(r).filter((x) => x.severity === 'broken');
+  assert.equal(a.length, 1);
+  assert.ok(a[0].message.includes('06 AI Team/Agents/Kaspar/AGENT.md') && a[0].message.includes('06 AI Team/Agents/Vita/AGENT.md'));
+  assert.ok(a[0].message.includes(ID.pax));
+  assert.equal(r.health, 'broken');
+});
+
+test('RED 4: a manifest without `agents` skips identity matching, says so once, and still checks every local contract', async () => {
+  const remote = remoteManifest(); delete remote.agents;
+  const files = cleanFiles(); files['06 AI Team/Agents/Kaspar/AGENT.md'] = contract('Kaspar', undefined);
+  const r = await run(files, { remote });
+  const a = agentFindings(r);
+  const note = a.filter((x) => x.severity === 'info');
+  assert.equal(note.length, 1);
+  assert.ok(note[0].message.includes('predates agent identities'));
+  assert.ok(a.some((x) => x.severity === 'attention' && x.path === '06 AI Team/Agents/Kaspar/AGENT.md'));
+  /* and with the shipped Penn renamed, the old manifest reports the canonical path missing, as it always did */
+  const files2 = cleanFiles(); delete files2[PENN_PATH]; files2['06 AI Team/Agents/Nancy/AGENT.md'] = contract('Nancy', ID.penn);
+  const r2 = await run(files2, { remote });
+  assert.ok(r2.findings.some((x) => x.kind === 'file' && x.path === PENN_PATH && x.severity === 'attention'));
+  assert.equal(agentFindings(r2).length, 1, 'only the predates line');
+});
+
+test('GREEN: a vault whose contracts all carry good ids, shipped ones at their paths, has no identity findings', async () => {
+  const files = cleanFiles();
+  files['06 AI Team/Agents/Kaspar/AGENT.md'] = contract('Kaspar', '8f0b7a3e-2d1c-4e5f-9a6b-1c2d3e4f5a6b');
+  files['06 AI Team/Agents/Agent 01/AGENT.md'] = contract('Agent 01', NIL + ' # placeholder');
+  const r = await run(files);
+  assert.equal(r.health, 'ok');
+  assert.deepEqual(r.findings, []);
+});
+
+test('GREEN: the myicor_id is read from the first frontmatter block only, wherever it sits in it', async () => {
+  const files = cleanFiles();
+  /* the private-vault shape: id first, no type:, then a body that carries its own --- rules and a stray "myicor_id:" mention */
+  files[PENN_PATH] = '---\nmyicor_id: ' + ID.penn + '\nagent_version: 1.1.1\n---\n\n# Penn\n\n---\n\nmyicor_id: not-a-real-field\n';
+  const r = await run(files);
+  assert.equal(agentFindings(r).length, 0);
+});
+
+test('readFrontmatter: first block, key: value lines, inline comments and quotes stripped, body ignored', () => {
+  const fm = engine.readFrontmatter('﻿---\r\ntype: agent\r\nmyicor_id: "' + ID.penn + '"  # minted 2026-09-07\r\nname: Penn\r\n---\r\n# Penn\r\n---\r\nrole: nope\r\n');
+  assert.deepEqual(fm, { type: 'agent', myicor_id: ID.penn, name: 'Penn' });
+  assert.deepEqual(engine.readFrontmatter('# no frontmatter\n---\nx: y\n---\n'), {});
+  assert.deepEqual(engine.readFrontmatter('---\nunterminated: yes\n'), {});
+});
+
+test('renderReport: the agents group is counted like the others, and the AI paragraph forbids changing or reusing an id', async () => {
+  const files = cleanFiles(); files['06 AI Team/Agents/Kaspar/AGENT.md'] = contract('Kaspar', undefined);
+  files['.obsidian/community-plugins.json'] = '[]';
+  const r = await run(files);
+  const md = engine.renderReport(r, { now: new Date('2026-09-07T10:00:00Z') });
+  assert.ok(md.includes('### agents (1)'));
+  assert.ok(md.includes('`06 AI Team/Agents/Kaspar/AGENT.md`'));
+  assert.ok(/never change or reuse a `myicor_id`/i.test(md));
+  assert.ok(!md.includes('—') && !md.includes('–'), 'no em or en dashes in generated prose');
 });

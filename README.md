@@ -30,6 +30,19 @@ gets fixed fast.
    - **Structure.** The rooms the scaffold relies on exist, the plugins it
      expects are installed and enabled, every Base points at a folder that
      is there, and every enabled CSS snippet has its file.
+   - **Agent identity.** From scaffold 1.11.0 every agent contract
+     (`06 AI Team/Agents/<Name>/AGENT.md`) carries a stable `myicor_id`, a
+     lowercase UUID v4 minted once at hire and never changed. The check
+     finds each shipped agent by that id, so an agent you renamed is
+     reported as intact under your name, not as missing; a shipped agent
+     whose contract carries no id, or a different id, is named with the
+     fix. And every contract in the vault, shipped or your own, is checked:
+     no id, a malformed id, the nil placeholder on something that is not a
+     template, or two contracts sharing one id (that one is broken). A
+     template is recognised by the nil placeholder
+     `00000000-0000-0000-0000-000000000000` plus a name that starts with
+     `Agent ` or `_`. The `.claude/agents/` shims are not checked for
+     identity; they are files like any other.
 4. **Shows the result** as a dot in the status bar (green ok, orange
    attention, red broken), a summary when you click it, and a report note.
 
@@ -49,7 +62,9 @@ by default. Frontmatter carries `health`, `installed_version`,
 `latest_version` and the counts, so a Base or a script can read it. The body
 groups findings by what to do: **Broken** first (structure the scaffold
 relies on), then **Attention** (things to do), then **Info** (worth knowing).
-Each finding names the file, says what was found, and says what to do.
+Inside each, findings are grouped by kind (guidelines, SOPs, agents, ...) so
+seventy missing files read as six guidelines and thirteen SOPs. Each finding
+names the file, says what was found, and says what to do.
 
 ## Settings
 
@@ -69,17 +84,36 @@ A check that cannot fetch the latest manifest says so in the status bar
 The manifest is built by the scaffold's own
 `Scripts/build-scaffold-manifest.py` and checked by its release build. This
 plugin reads schema 1: `version`, `rooms`, `plugins`, `snippets`, `files`
-(path, sha256, kind, example), `bases`, and `history` (per version:
-`removed` with a `note`, `renamed`, `added`). A removal without a note fails
-the scaffold's own check before it ever reaches a member, which is the
-property this whole design rests on: the reason a file went is written down
-once, by the person who removed it, and every vault reads that one line.
+(path, sha256, kind, example), `bases`, `history` (per version: `removed`
+with a `note`, `renamed`, `added`), and, from scaffold 1.11.1, `agents`. A
+removal without a note fails the scaffold's own check before it ever reaches
+a member, which is the property this whole design rests on: the reason a
+file went is written down once, by the person who removed it, and every
+vault reads that one line.
+
+`agents` is a top-level array, sorted by name, one entry per shipped agent
+that is not a template:
+
+```json
+{ "name": "Penn", "myicor_id": "d40ec637-e612-4baf-987c-a3ebb71a1536",
+  "path": "06 AI Team/Agents/Penn/AGENT.md", "shim": ".claude/agents/penn.md" }
+```
+
+`shim` is `null` for an agent without one (Larry, the main-session
+identity). The key is optional: a manifest without it (1.11.0 and older)
+still runs every local-contract check, and the report carries one info line
+saying the manifest predates agent identities, so shipped agents are matched
+by path only. `schema` stays 1. The ids are the same UUIDs the scaffold's
+`mint-agent-ids.py --export` prints, and the same ones a myICOR library row
+for that agent carries as its primary key; the plugin never mints, changes,
+or reuses one.
 
 ## Tests
 
 `npm test` runs the engine against in-memory vaults: every defect the plugin
 exists to find is planted and must be found, and a clean vault must produce
-no findings. The red cases come first.
+no findings. The red cases come first. The agent-identity gates use the real
+ids of the shipped agents as fixtures.
 
 ## Licence
 
