@@ -123,6 +123,22 @@ exists to find is planted and must be found, and a clean vault must produce
 no findings. The red cases come first. The agent-identity gates use the real
 ids of the shipped agents as fixtures.
 
+## Releasing
+
+A release is cut only when a version tag is pushed. A plain push to `main`
+never releases anything.
+
+1. Bump the version in 3 files: `manifest.json`, `versions.json` (new line, same `minAppVersion`) and `package.json`. Add the CHANGELOG entry.
+2. Push to `main`. Nothing ships yet.
+3. Flint reads the diff before ship. No read, no tag.
+4. Tag the commit with the bare version and push the tag:
+   `git tag -a 0.2.1 -m "ICOR for Life - Scaffold Check 0.2.1" && git push origin 0.2.1`
+   (never `v0.2.1`: the Obsidian directory reads the tag as the version).
+
+The Release workflow refuses a tag that does not equal `manifest.json`'s
+version or that is not on `main`, then publishes `main.js`, `manifest.json` and `styles.css` with the commit subjects since the previous tag as notes.
+The nightly version gate still checks that tag, branch and release agree.
+
 ## Licence
 
 What you can do: install it, run it, read the code, modify your own copy,
