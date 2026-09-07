@@ -24,7 +24,19 @@ Versions follow [Semantic Versioning](https://semver.org/).
 - A manifest without `agents` (1.11.0 and older) still works: the local
   checks run, identity matching is skipped, and one info line says the
   manifest predates agent identities.
-- 17 new gates, red first, with the shipped agents' real ids as fixtures.
+- 18 new gates, red first, with the shipped agents' real ids as fixtures.
+
+### Changed
+- The config folder is no longer assumed to be `.obsidian`: the plugin
+  passes the vault's own `configDir`, so a device on a config-folder
+  profile (`.obsidian-mobile`) is checked against the folder it uses.
+- The settings tab no longer opens with a heading carrying the plugin
+  name (Obsidian plugin guideline; scanner rule
+  `settings-tab/no-manual-html-headings`).
+- `SECURITY.md` and the README disclose the two new reads (agent
+  contracts and, in the renamed-agent case, the `.claude/agents` shims),
+  and that a vault received through Obsidian Sync has no hidden folders
+  except `.obsidian`.
 
 ## [0.1.0] - 2026-09-01
 

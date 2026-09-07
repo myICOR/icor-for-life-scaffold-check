@@ -216,7 +216,7 @@ async function checkAgents({ fs, remote, add }) {
 }
 
 /*
- * runChecks({ fs, hash, remote, local, installedVersion })
+ * runChecks({ fs, hash, remote, local, installedVersion, configDir })
  *
  *   fs.exists(path) -> bool, fs.read(path) -> string, fs.readBinary(path)
  *   -> ArrayBuffer|Buffer, fs.listBases() -> [paths of every .base outside
@@ -224,14 +224,17 @@ async function checkAgents({ fs, remote, add }) {
  *   AGENT.md], fs.listShims() -> [every .claude/agents/<slug>.md]  (all async)
  *   hash(bytes) -> hex sha256 (async)
  *   remote: the latest manifest (parsed). local: the vault's own manifest or
- *   null. installedVersion: the VERSION file's content or null.
+ *   null. installedVersion: the VERSION file's content or null. configDir:
+ *   the vault's config folder (`app.vault.configDir`), default `.obsidian`;
+ *   a device on a config-folder profile keeps its plugins elsewhere.
  *
  * Returns { health, installedVersion, latestVersion, findings, counts }.
  * A finding: { kind, severity, path, message, action, since? }.
  * severity: 'broken' (structure the vault relies on is gone), 'attention'
  * (something to do), 'info' (worth knowing, nothing to do).
  */
-async function runChecks({ fs, hash, remote, local, installedVersion }) {
+async function runChecks({ fs, hash, remote, local, installedVersion, configDir }) {
+  const cfg = (configDir || '.obsidian').replace(/\/+$/, '');
   const findings = [];
   const add = (kind, severity, path, message, action, extra) =>
     findings.push(Object.assign({ kind, severity, path, message, action }, extra || {}));
@@ -334,24 +337,24 @@ async function runChecks({ fs, hash, remote, local, installedVersion }) {
 
   /* 7. plugins the vault expects */
   let enabled = [];
-  try { enabled = JSON.parse(await fs.read('.obsidian/community-plugins.json')); } catch (e) { enabled = []; }
+  try { enabled = JSON.parse(await fs.read(cfg + '/community-plugins.json')); } catch (e) { enabled = []; }
   for (const id of remote.plugins || []) {
-    const installed = await fs.exists('.obsidian/plugins/' + id + '/manifest.json');
-    if (!installed) add('plugin', 'attention', '.obsidian/plugins/' + id, 'Plugin is not installed.', 'Install it from the latest scaffold or the community list; the vault is built to have it.');
-    else if (!enabled.includes(id)) add('plugin', 'attention', '.obsidian/plugins/' + id, 'Plugin is installed but not enabled.', 'Enable it under Settings, Community plugins.');
+    const installed = await fs.exists(cfg + '/plugins/' + id + '/manifest.json');
+    if (!installed) add('plugin', 'attention', cfg + '/plugins/' + id, 'Plugin is not installed.', 'Install it from the latest scaffold or the community list; the vault is built to have it.');
+    else if (!enabled.includes(id)) add('plugin', 'attention', cfg + '/plugins/' + id, 'Plugin is installed but not enabled.', 'Enable it under Settings, Community plugins.');
   }
 
   /* 8. snippets enabled but gone (the reverse of a leftover) */
   let appearance = {};
-  try { appearance = JSON.parse(await fs.read('.obsidian/appearance.json')); } catch (e) { appearance = {}; }
+  try { appearance = JSON.parse(await fs.read(cfg + '/appearance.json')); } catch (e) { appearance = {}; }
   for (const s of appearance.enabledCssSnippets || []) {
-    if (!(await fs.exists('.obsidian/snippets/' + s + '.css'))) {
-      add('snippet', 'attention', '.obsidian/snippets/' + s + '.css', 'Enabled in appearance.json but the file is gone.',
+    if (!(await fs.exists(cfg + '/snippets/' + s + '.css'))) {
+      add('snippet', 'attention', cfg + '/snippets/' + s + '.css', 'Enabled in appearance.json but the file is gone.',
         'Disable it under Settings, Appearance, CSS snippets. The scaffold no longer ships it.');
     }
   }
   if (Array.isArray(remote.snippets) && remote.snippets.length === 0 && (appearance.enabledCssSnippets || []).length) {
-    add('snippet', 'info', '.obsidian/appearance.json', 'The latest scaffold enables no CSS snippets; this vault enables ' + appearance.enabledCssSnippets.length + '.',
+    add('snippet', 'info', cfg + '/appearance.json', 'The latest scaffold enables no CSS snippets; this vault enables ' + appearance.enabledCssSnippets.length + '.',
       'If they are the scaffold\'s old snippets, disable them; their rules live in the theme now.');
   }
 
@@ -473,7 +476,7 @@ if (obsidian) {
       exists: (p) => adapter.exists(normalizePath(p)),
       read: (p) => adapter.read(normalizePath(p)),
       readBinary: (p) => adapter.readBinary(normalizePath(p)),
-      listBases: async () => app.vault.getFiles().filter((f) => f.extension === 'base' && !f.path.startsWith('.obsidian/')).map((f) => f.path),
+      listBases: async () => app.vault.getFiles().filter((f) => f.extension === 'base' && !f.path.startsWith(app.vault.configDir + '/')).map((f) => f.path),
       listAgentContracts: async () => {
         const dir = normalizePath(AGENTS_DIR);
         if (!(await adapter.exists(dir))) return [];
@@ -560,7 +563,7 @@ if (obsidian) {
       const { fs, installedVersion, local } = await this.readLocal();
       let result;
       try {
-        result = await engine.runChecks({ fs, hash: sha256Hex, remote, local, installedVersion });
+        result = await engine.runChecks({ fs, hash: sha256Hex, remote, local, installedVersion, configDir: this.app.vault.configDir });
       } catch (e) {
         this.paintStatus('offline');
         if (interactive) new Notice('Scaffold Check failed: ' + e.message);
@@ -638,7 +641,6 @@ if (obsidian) {
     display() {
       const c = this.containerEl;
       c.empty();
-      c.createEl('h2', { text: 'ICOR for Life - Scaffold Check' });
       c.createEl('p', { text: 'Read-only. Compares this vault with the latest ICOR for Life Scaffold and writes a report. It never changes a scaffold file.' });
       const s = this.plugin.settings;
       const save = () => this.plugin.saveData(s);

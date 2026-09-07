@@ -49,7 +49,15 @@ gets fixed fast.
 ## What it never does
 
 It never changes a scaffold file. The only things it writes are the report
-note (one per day, in a folder you choose) and its own `data.json`. Deleting a
+note (one per day, in a folder you choose) and its own `data.json`. What it
+reads is listed in `SECURITY.md`; since 0.2.0 that includes every
+`06 AI Team/Agents/<Name>/AGENT.md` (your own agents' contracts too, for the
+`myicor_id` in their frontmatter) and, only when a shipped agent is found
+under a folder name of your own, the `.claude/agents/*.md` shims, to find
+the one pointing at it. Obsidian Sync never carries hidden folders except
+`.obsidian`, so on a vault received through Sync `.claude/*` and
+`.icor-for-life/` read as missing: the check reports that and does not
+throw. Deleting a
 leftover, updating a file, enabling a plugin: those are yours to do, or your
 AI's. The report ends with a prompt you can paste into your AI session to
 have the fixes carried out, one change at a time, with the same rules the

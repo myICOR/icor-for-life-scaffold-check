@@ -38,9 +38,17 @@ send a real token.** Describe it; do not paste it.
 ## Scope: what this plugin actually touches
 
 **Reads.** Every file the latest manifest names, to hash it; every `.base`
-file outside `.obsidian/`; `.obsidian/community-plugins.json` and
-`appearance.json`; `.icor-for-life/VERSION` and `manifest.json`. Hashing runs
-locally through the Web Crypto API. No file content leaves the vault.
+file outside the config folder; the config folder's (`.obsidian/` by
+default) `community-plugins.json` and `appearance.json`; `.icor-for-life/VERSION`
+and `manifest.json`. Since 0.2.0, for the agent-identity check: every
+`06 AI Team/Agents/<Name>/AGENT.md`, including contracts of your own agents
+that the scaffold never shipped (only the frontmatter is used, to read
+`myicor_id` and `name`); and `.claude/agents/*.md`, read only in the
+renamed-agent case, to find the shim that points at a shipped agent's
+contract under your own folder name. Hashing runs locally through the Web
+Crypto API. No file content leaves the vault, and nothing from a contract
+or a shim is written anywhere but the report's finding lines, which name
+paths, never content.
 
 **Writes.** One report note in the folder set in settings, and the plugin's
 own `data.json`. Nothing else, ever. The plugin has no "fix" button on

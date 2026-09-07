@@ -432,3 +432,23 @@ test('renderReport: the agents group is counted like the others, and the AI para
   assert.ok(/never change or reuse a `myicor_id`/i.test(md));
   assert.ok(!md.includes('—') && !md.includes('–'), 'no em or en dashes in generated prose');
 });
+
+/* ---------------------------------------------------- config folder ---- */
+/* A vault on a config-folder profile (`.obsidian-mobile`, an Obsidian Sync
+   feature) keeps its plugins and appearance there. The engine takes the
+   folder as an option, defaulting to `.obsidian`. Red first. */
+
+test('RED: configDir is honoured for plugins, appearance and snippets; the default stays .obsidian', async () => {
+  const files = cleanFiles();
+  delete files['.obsidian/community-plugins.json']; delete files['.obsidian/plugins/icor-for-life-connect/manifest.json']; delete files['.obsidian/appearance.json'];
+  files['.obsidian-mobile/community-plugins.json'] = '["icor-for-life-connect"]';
+  files['.obsidian-mobile/plugins/icor-for-life-connect/manifest.json'] = '{}';
+  files['.obsidian-mobile/appearance.json'] = '{"enabledCssSnippets":["gone"]}';
+  const r = await run(files, { configDir: '.obsidian-mobile' });
+  assert.ok(!r.findings.some((x) => x.kind === 'plugin'), 'the plugin under the profile folder must count as installed and enabled');
+  const s = r.findings.find((x) => x.kind === 'snippet' && x.severity === 'attention');
+  assert.ok(s && s.path === '.obsidian-mobile/snippets/gone.css');
+  /* and without the option the same vault reads as a bare one: plugin not installed under .obsidian */
+  const r2 = await run(files);
+  assert.ok(r2.findings.some((x) => x.kind === 'plugin' && x.path === '.obsidian/plugins/icor-for-life-connect'));
+});
