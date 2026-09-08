@@ -1,0 +1,9 @@
+{
+  "manifestUrl": "https://raw.githubusercontent.com/myICOR/icor-for-life-scaffold/main/.icor-for-life/manifest.json",
+  "githubToken": "ghp_FIXTURE_not_a_real_token_0000000000000000",
+  "runOnStartup": true,
+  "writeReport": true,
+  "reportFolder": "06 AI Team/AI Team Knowledge/Scaffold Check",
+  "lastRun": "2026-09-07T09:00:00.000Z",
+  "lastHealth": "ok"
+}

@@ -4,6 +4,39 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-08
+
+### Changed
+- Keys move to Obsidian secret storage. The GitHub token no longer lives in
+  `data.json`. A new setting, "Where your keys live", picks one of two
+  backends: Obsidian's keychain (Settings, General, Keychain; the default
+  on Obsidian 1.11.4 and newer, id `icor-for-life-scaffold-check-github-token`)
+  or a KEY=value env file in the vault (`06 AI Team/AI Team Knowledge/.env`
+  by default, key `GITHUB_TOKEN`; the only choice on an older Obsidian,
+  where the dropdown is disabled). Only the selected backend is read; there
+  is no fallback to the other one, since a fallback would hide a
+  misconfiguration.
+- On first load in keychain mode a token still in `data.json` is moved into
+  the keychain and the field is blanked. Nothing is ever moved the other
+  way on its own: the settings tab shows where a token is right now (the
+  keychain, the env file, still in `data.json`) with a "Move to ..." button
+  per place, and a Remove button for the backend in use.
+- The token field is a password input that is cleared once the token is
+  saved. No value is shown, echoed in a notice, or logged, not even masked;
+  a gate in the test suite fails on any `console` call in the source.
+- Saving in env-file mode rewrites (or appends) that one `GITHUB_TOKEN=`
+  line and leaves every other byte of the file as it was, including a last
+  line without a terminator, CRLF endings, comments, and blank lines.
+
+### Added
+- `test/secrets.test.mjs`: 28 gates for the env-file reader and writer
+  (byte-identical rest of file, idempotent, comment lines untouched), the
+  backend choice, the keychain wrapper, and the migration against a 0.2.0
+  `data.json` fixture. Red cases first, and each new gate was watched
+  going red against a mutated copy of `main.js` before it was trusted.
+- README: "Where your keys live", and the two disclosures the Obsidian
+  developer policies ask for (account, network use).
+
 ## [0.2.0] - 2026-09-07
 
 ### Added

@@ -49,8 +49,9 @@ gets fixed fast.
 ## What it never does
 
 It never changes a scaffold file. The only things it writes are the report
-note (one per day, in a folder you choose) and its own `data.json`. What it
-reads is listed in `SECURITY.md`; since 0.2.0 that includes every
+note (one per day, in a folder you choose), its own `data.json`, and, if you
+keep the GitHub token in an env file, that file's one `GITHUB_TOKEN` line.
+What it reads is listed in `SECURITY.md`; since 0.2.0 that includes every
 `06 AI Team/Agents/<Name>/AGENT.md` (your own agents' contracts too, for the
 `myicor_id` in their frontmatter) and, only when a shipped agent is found
 under a folder name of your own, the `.claude/agents/*.md` shims, to find
@@ -79,13 +80,66 @@ names the file, says what was found, and says what to do.
 | Setting | Default | What it is |
 | --- | --- | --- |
 | Latest manifest URL | the scaffold repository's `main` branch | Where the latest `.icor-for-life/manifest.json` is published. A raw file URL or a GitHub contents API URL. |
-| GitHub token | empty | Only for a private manifest URL. Stored in this plugin's `data.json`, sent only to that URL's host, never written anywhere else. |
+| Where your keys live | Obsidian's keychain when this Obsidian has one (1.11.4 and newer), else an env file | Which of the two backends holds the GitHub token. See "Where your keys live" below. |
+| Env file | `06 AI Team/AI Team Knowledge/.env` | Vault-relative path of the KEY=value file used in env-file mode. Only its `GITHUB_TOKEN` line is ever written. |
+| GitHub token | not set | Only for a private manifest URL. Saved to the backend above, sent only to that URL's host, never written anywhere else. The field is cleared once the token is saved; the line under it says where the token is. |
 | Run on startup | on | Check once when the vault opens. |
 | Write the report note | on | One note per day, overwritten on later runs that day. |
 | Report folder | `06 AI Team/AI Team Knowledge/Scaffold Check` | Where the note goes. |
 
 A check that cannot fetch the latest manifest says so in the status bar
 (grey, "offline") and does not guess.
+
+## Where your keys live
+
+The plugin has one secret, the optional GitHub token, and since 0.3.0 it
+is never kept in `data.json` (which rides along with every vault sync and
+git push). Two backends, chosen by the "Where your keys live" setting:
+
+- **Obsidian's keychain** (Settings, General, Keychain). The default on
+  Obsidian 1.11.4 and newer. The token is stored under the id
+  `icor-for-life-scaffold-check-github-token`, outside the vault folder and
+  outside `data.json`. On desktop Obsidian keeps one encrypted blob per
+  vault; on mobile one per device, shared across vaults. Obsidian Sync does
+  not carry it, so every device holds its own copy: a token entered on the
+  Mac is not on the iPad. The keychain is shared by every installed plugin,
+  which is why the id carries this plugin's full name.
+- **An env file in the vault.** A plain `KEY=value` file, by default
+  `06 AI Team/AI Team Knowledge/.env` (the "Env file" setting). The key is
+  `GITHUB_TOKEN`. Comment lines start with `#`; a value runs from the `=`
+  to the end of its line, so quotes would be part of it, and nothing is
+  interpolated. If the key appears twice the last line counts. Saving in
+  this mode rewrites (or appends) that one line and leaves every other byte
+  of the file as it was. On an Obsidian older than 1.11.4 this is the only
+  choice and the dropdown is disabled.
+
+Only the selected backend is read. There is no fallback to the other one,
+because a fallback would hide a misconfiguration behind a check that still
+works. Changing the dropdown moves nothing by itself: the line under the
+token field says where a token is right now ("in Obsidian's keychain", "in
+the env file", "still in data.json", "not set") and offers a "Move to ..."
+button for each place that is not the backend in use, plus Remove for the
+one that is. The one automatic move: on the first load of 0.3.0 in
+keychain mode, a token that 0.2.0 saved in `data.json` is moved into the
+keychain and the field is blanked. Nothing is ever moved out of the
+keychain on its own.
+
+The token field is a password input, cleared once the token is saved. No
+value is ever shown, echoed in a notice, or written to a log, not even
+masked.
+
+## Disclosures
+
+**Account.** No account is required. The plugin works without any token
+against the public scaffold repository. A GitHub account, and a token
+from it, is needed only if you point the manifest URL at a private
+repository of your own.
+
+**Network use.** One HTTPS GET to the manifest URL in settings (by default
+`raw.githubusercontent.com`, the scaffold repository), on startup if
+enabled and on demand. If a token is set it is sent as a bearer header to
+that URL's host and to nothing else. No file content leaves the vault.
+There is no telemetry and no analytics.
 
 ## For scaffold maintainers
 

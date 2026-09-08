@@ -1,3 +1,4 @@
-# Settings store; may hold a GitHub token for a private manifest URL. Never in git.
+# Settings store. Since 0.3.0 the GitHub token is not in it (Obsidian keychain or
+# an env file), but a data.json written by 0.2.0 may still carry one. Never in git.
 data.json
 .DS_Store

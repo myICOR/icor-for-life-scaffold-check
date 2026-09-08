@@ -51,8 +51,22 @@ or a shim is written anywhere but the report's finding lines, which name
 paths, never content.
 
 **Writes.** One report note in the folder set in settings, and the plugin's
-own `data.json`. Nothing else, ever. The plugin has no "fix" button on
-purpose: a tool that can only read cannot be tricked into writing.
+own `data.json`. In env-file mode, one more: the `GITHUB_TOKEN` line of the
+env file named in settings, rewritten or appended when you save or move the
+token, every other byte of that file left as it was. Nothing else, ever.
+The plugin has no "fix" button on purpose: a tool that can only read cannot
+be tricked into writing.
+
+**The token.** Since 0.3.0 it lives in Obsidian's keychain
+(`app.secretStorage`, id `icor-for-life-scaffold-check-github-token`) or,
+by your choice or on an Obsidian older than 1.11.4, in that env file. It is
+not in `data.json` any more; a token 0.2.0 left there is moved into the
+keychain on first load in keychain mode, and otherwise shown in the settings
+tab with a button to move it. Obsidian's keychain is shared by every
+installed plugin: any plugin can read any id, which is why ours carries the
+full plugin name, and why a plugin you do not trust should not be installed
+next to a token you care about. On mobile the keychain is per device, not
+per vault.
 
 **Network.** One GET to the manifest URL in settings, on startup (if enabled)
 and on demand. The default is the scaffold repository on GitHub. If a GitHub
@@ -61,8 +75,11 @@ There is no telemetry and no analytics.
 
 **In scope, and we want to hear about it:**
 
-- The token appearing anywhere other than `data.json` and the request header:
-  in the report note, a log line, a notice, a URL.
+- The token appearing anywhere other than its backend (the keychain entry or
+  the env file's `GITHUB_TOKEN` line) and the request header: in the report
+  note, `data.json`, a log line, a notice, a URL, the settings tab.
+- The env-file writer touching any byte of that file other than the
+  `GITHUB_TOKEN` line, or a value that turns into a second line.
 - A manifest served by an attacker causing the plugin to write outside the
   report folder, or to write anything but the report. The manifest carries
   paths; those paths are only ever READ and hashed, never written or
@@ -76,10 +93,14 @@ There is no telemetry and no analytics.
 
 ## Out of scope
 
-- The token being stored in your own vault's `data.json`. That is the design;
-  it is git-ignored here and by the scaffold. Exfiltration away from the
-  vault is in scope; storage in it is not.
-- Anyone with filesystem access to your vault reading `data.json`.
+- The token being readable by another plugin through Obsidian's keychain, or
+  being in your own vault's env file when you chose that backend. Both are
+  the design: the keychain is shared by Obsidian's own rule, and the env file
+  is inside the vault by yours (the default path is git-ignored by the
+  scaffold). Exfiltration away from the vault is in scope; storage in it is
+  not.
+- Anyone with filesystem access to your vault reading the env file, or a
+  `data.json` written by 0.2.0 before the first load of 0.3.0.
 - Bugs in Obsidian itself, or breakage caused by another plugin.
 - Missing hardening with no demonstrated impact.
 
