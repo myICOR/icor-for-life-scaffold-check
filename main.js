@@ -485,12 +485,40 @@ const ENV_LINE = /^(\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*=)(.*)$/;
 
 function trimmed(v) { return typeof v === 'string' ? v.trim() : ''; }
 
+/* A vault-relative file path: forward slashes, no leading slash, no '~', no
+   '..' segment. Obsidian's normalizePath() does not resolve a dot-dot
+   segment, so without this a setting of '../x' would read and write outside
+   the vault. Same shape as the Planner's. */
+function normalizeEnvFilePath(v) {
+  const raw = trimmed(v).replace(/\\/g, '/');
+  if (!raw) return { ok: false, path: '', error: 'Enter a path inside the vault, for example ' + DEFAULT_ENV_FILE + '.' };
+  if (/^([a-zA-Z]:)?\//.test(raw) || raw.startsWith('~')) return { ok: false, path: '', error: 'The path is relative to the vault root, not an absolute path.' };
+  const parts = raw.split('/').filter((p) => p !== '' && p !== '.');
+  if (parts.some((p) => p === '..')) return { ok: false, path: '', error: 'The path must stay inside the vault (no "..").' };
+  if (!parts.length) return { ok: false, path: '', error: 'Enter a file name, not a folder.' };
+  return { ok: true, path: parts.join('/'), error: '' };
+}
+
+/* The text as pieces that each end at a newline (kept) or at the end of the
+   string, so the pieces joined are the text byte for byte. A plain loop on
+   purpose: a regex lookbehind literal is a parse-time SyntaxError on iOS
+   before 16.4, and this plugin runs on mobile. */
+function splitKeepingEndings(src) {
+  const out = [];
+  let start = 0;
+  for (let i = 0; i < src.length; i++) {
+    if (src.charCodeAt(i) === 10) { out.push(src.slice(start, i + 1)); start = i + 1; }
+  }
+  if (start < src.length) out.push(src.slice(start));
+  return out;
+}
+
 /* The file as lines that each keep their own terminator, so a rewrite puts
    every untouched line back byte for byte. */
 function envLines(text) {
   const src = typeof text === 'string' ? text : '';
   if (src === '') return [];
-  return src.split(/(?<=\n)/).map((raw) => {
+  return splitKeepingEndings(src).map((raw) => {
     const body = raw.replace(/\r?\n$/, '');
     return { raw, body, eol: raw.slice(body.length), match: ENV_LINE.exec(body) };
   });
@@ -592,7 +620,7 @@ function migrateToken(settings, store, backend) {
   return true;
 }
 
-const secrets = { SECRET_ID, ENV_KEY, DEFAULT_ENV_FILE, BACKEND_STORE, BACKEND_ENV, readEnvValue, writeEnvValue, resolveBackend, secretStorageUsable, SecretStore, migrateToken };
+const secrets = { SECRET_ID, ENV_KEY, DEFAULT_ENV_FILE, BACKEND_STORE, BACKEND_ENV, readEnvValue, writeEnvValue, resolveBackend, secretStorageUsable, SecretStore, migrateToken, normalizeEnvFilePath, splitKeepingEndings };
 
 /* ======================================================= the plugin ===== */
 
@@ -653,6 +681,8 @@ if (obsidian) {
   class ScaffoldCheckPlugin extends Plugin {
     async onload() {
       this.settings = Object.assign({}, DEFAULTS, (await this.loadData()) || {});
+      /* A hand-edited data.json cannot point outside the vault either. */
+      this.settings.envFilePath = normalizeEnvFilePath(this.settings.envFilePath).path || DEFAULT_ENV_FILE;
       this.lastResult = null;
       this.store = new SecretStore(this.app.secretStorage);
       if (migrateToken(this.settings, this.store, this.backend())) await this.saveData(this.settings);
@@ -744,7 +774,7 @@ if (obsidian) {
     /* ---- the token: one backend at a time, never a fallback ---- */
 
     backend() { return resolveBackend(this.settings.secretsBackend, this.store.available()); }
-    envPath() { return normalizePath(trimmed(this.settings.envFilePath) || DEFAULT_ENV_FILE); }
+    envPath() { return normalizePath(normalizeEnvFilePath(this.settings.envFilePath).path || DEFAULT_ENV_FILE); }
 
     /* The env file's text, or null when there is no such file. */
     async readEnvFile() {
@@ -906,9 +936,18 @@ if (obsidian) {
           d.setDisabled(!storeOk);
           d.onChange(async (v) => { s.secretsBackend = v === BACKEND_ENV ? BACKEND_ENV : BACKEND_STORE; await save(); this.display(); });
         });
-      new Setting(c).setName('Env file')
-        .setDesc('Vault-relative path of the KEY=value file used in env-file mode. Only its GITHUB_TOKEN line is ever written; every other line stays exactly as it is.')
-        .addText((t) => t.setValue(s.envFilePath).setPlaceholder(DEFAULT_ENV_FILE).onChange(async (v) => { s.envFilePath = v.trim() || DEFAULT_ENV_FILE; await save(); this.renderTokenStatus(); }));
+      const envDesc = 'Path of the key=value file, relative to the vault root; an absolute path or a ".." segment is refused. Only the token line is ever written; every other line stays exactly as it is.';
+      const envRow = new Setting(c).setName('Env file')
+        .setDesc(envDesc)
+        .addText((t) => t.setValue(s.envFilePath).setPlaceholder(DEFAULT_ENV_FILE).onChange(async (v) => {
+          /* An empty field means the default. A path that leaves the vault is
+             refused, shown in place, and not saved. */
+          const n = normalizeEnvFilePath(trimmed(v) || DEFAULT_ENV_FILE);
+          envRow.descEl.toggleClass('is-failed', !n.ok);
+          envRow.setDesc(n.ok ? envDesc : n.error);
+          if (!n.ok) return;
+          s.envFilePath = n.path; await save(); this.renderTokenStatus();
+        }));
 
       let pending = '';
       let input = null;
@@ -919,12 +958,12 @@ if (obsidian) {
           t.inputEl.type = 'password';
           t.inputEl.setAttribute('autocomplete', 'off');
           t.inputEl.setAttribute('aria-label', 'GitHub token');
-          t.setPlaceholder('Paste the token, then Save').onChange((v) => { pending = v; });
+          t.setPlaceholder('Paste the token, then save it').onChange((v) => { pending = v; });
         })
         .addButton((b) => b.setButtonText('Save').setCta().onClick(async () => {
           const v = pending.trim();
-          if (!v) { new Notice('Scaffold Check: paste a token first. To forget the saved one, use Remove.'); return; }
-          try { await plugin.writeToken(v); } catch (e) { new Notice('Scaffold Check: could not save the token (' + e.message + ').'); return; }
+          if (!v) { new Notice('Scaffold Check: paste a token first. To forget the saved one, use the remove button.'); return; }
+          try { await plugin.writeToken(v); } catch (e) { new Notice('Scaffold Check: the token could not be saved, so nothing changed. Check that it is one line and that the env file path is inside the vault.'); return; }
           pending = '';
           if (input) input.setValue('');
           new Notice('Scaffold Check: token saved to ' + label + '.');
@@ -965,7 +1004,7 @@ if (obsidian) {
       if (!lines.length) lines.push(where.error ? 'Could not read the env file (' + where.error + ').' : 'Not set. The manifest URL is fetched without a token.');
       row.setDesc(lines.join(' '));
       const move = (from) => row.addButton((b) => b.setButtonText('Move to ' + label).onClick(async () => {
-        try { await plugin.moveToken(from); } catch (e) { new Notice('Scaffold Check: could not move the token (' + e.message + ').'); return; }
+        try { await plugin.moveToken(from); } catch (e) { new Notice('Scaffold Check: the token could not be moved, so it stays where it was.'); return; }
         new Notice('Scaffold Check: token moved to ' + label + '.');
         await this.renderTokenStatus();
       }));
@@ -974,7 +1013,7 @@ if (obsidian) {
       if (where.env && backend !== BACKEND_ENV) move(BACKEND_ENV);
       const inUse = backend === BACKEND_STORE ? where.store : where.env;
       if (inUse) row.addButton((b) => b.setButtonText('Remove').setWarning().onClick(async () => {
-        try { await plugin.writeToken(''); } catch (e) { new Notice('Scaffold Check: could not remove the token (' + e.message + ').'); return; }
+        try { await plugin.writeToken(''); } catch (e) { new Notice('Scaffold Check: the token could not be removed and is still in place.'); return; }
         new Notice('Scaffold Check: token removed from ' + label + '.');
         await this.renderTokenStatus();
       }));

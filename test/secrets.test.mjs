@@ -14,7 +14,7 @@ import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
 const { secrets } = require('../main.js');
-const { SECRET_ID, ENV_KEY, DEFAULT_ENV_FILE, BACKEND_STORE, BACKEND_ENV, readEnvValue, writeEnvValue, resolveBackend, secretStorageUsable, SecretStore, migrateToken } = secrets;
+const { SECRET_ID, ENV_KEY, DEFAULT_ENV_FILE, BACKEND_STORE, BACKEND_ENV, readEnvValue, writeEnvValue, resolveBackend, secretStorageUsable, SecretStore, migrateToken, normalizeEnvFilePath, splitKeepingEndings } = secrets;
 
 /* A fake of app.secretStorage: the three synchronous methods, an id rule,
    and a switch that makes setSecret throw, for the refusal cases. */
@@ -44,6 +44,46 @@ test('the id and the key are the ones the suite contract names', () => {
   assert.ok(SECRET_ID.length <= 64);
   assert.equal(ENV_KEY, 'GITHUB_TOKEN');
   assert.equal(DEFAULT_ENV_FILE, '06 AI Team/AI Team Knowledge/.env');
+});
+
+/* --------------------------------------------------------------- the split */
+
+test('RED: the split keeps every terminator: CRLF lines and a last line without a newline come back byte for byte', () => {
+  const crlf = 'A=1\r\nB=2\r\nC=3';
+  assert.deepEqual(splitKeepingEndings(crlf), ['A=1\r\n', 'B=2\r\n', 'C=3']);
+  assert.equal(splitKeepingEndings(crlf).join(''), crlf, 'joined, the pieces are the source');
+  assert.deepEqual(splitKeepingEndings('a\n\nb\n'), ['a\n', '\n', 'b\n'], 'an empty line is a piece of its own');
+  assert.deepEqual(splitKeepingEndings('x'), ['x']);
+  assert.deepEqual(splitKeepingEndings(''), []);
+  assert.deepEqual(splitKeepingEndings(ENV_NO_FINAL_NEWLINE), others(ENV_NO_FINAL_NEWLINE, 'NOPE'), 'the same pieces the Node-side reference split gives');
+  /* Through the reader and the writer: the CRLF file's unterminated last line holds the key. */
+  assert.equal(readEnvValue(crlf + '\r\nGITHUB_TOKEN=tail', ENV_KEY), 'tail');
+  assert.equal(writeEnvValue(crlf + '\r\nGITHUB_TOKEN=tail', ENV_KEY, 'new'), crlf + '\r\nGITHUB_TOKEN=new');
+});
+
+test('RED: the plugin source has no regex lookbehind, since a lookbehind literal does not parse on iOS before 16.4', () => {
+  const src = readFileSync(new URL('../main.js', import.meta.url), 'utf8');
+  assert.equal(/\(\?<[=!]/.test(src), false, 'a lookbehind anywhere in main.js stops the plugin from loading on iOS 15.6 to 16.3');
+});
+
+/* ---------------------------------------------------------------- the path */
+
+test('RED: the env file path stays inside the vault: an absolute path, a ~ and any .. segment are refused', () => {
+  for (const bad of ['/etc/x', 'C:/x', 'C:\\x', '~/x', '~', '../x', 'a/../../x', 'a/b/..', '..', '', '   ', './']) {
+    const n = normalizeEnvFilePath(bad);
+    assert.equal(n.ok, false, JSON.stringify(bad) + ' must be refused');
+    assert.equal(n.path, '', 'a refused path is never a path');
+    assert.ok(n.error.length > 0, 'and it says why');
+  }
+  assert.equal(normalizeEnvFilePath('a/b/..').error, 'The path must stay inside the vault (no "..").');
+  assert.equal(normalizeEnvFilePath('/x').error, 'The path is relative to the vault root, not an absolute path.');
+});
+
+test('the env file path is normalised: backslashes, ./ segments, doubled and trailing slashes, blanks around it', () => {
+  assert.deepEqual(normalizeEnvFilePath(DEFAULT_ENV_FILE), { ok: true, path: DEFAULT_ENV_FILE, error: '' });
+  assert.equal(normalizeEnvFilePath('  a\\b/./c//.env  ').path, 'a/b/c/.env');
+  assert.equal(normalizeEnvFilePath('.env').path, '.env', 'a dotfile at the root is a file, not a segment');
+  assert.equal(normalizeEnvFilePath('..env').path, '..env', 'two dots as part of a name are not a dot-dot segment');
 });
 
 /* -------------------------------------------------------------- the reader */

@@ -102,13 +102,15 @@ git push). Two backends, chosen by the "Where your keys live" setting:
   outside `data.json`. On desktop Obsidian keeps one encrypted blob per
   vault; on mobile one per device, shared across vaults. Obsidian Sync does
   not carry it, so every device holds its own copy: a token entered on the
-  Mac is not on the iPad. The keychain is shared by every installed plugin,
-  which is why the id carries this plugin's full name.
+  Mac is not on the iPad. On a phone, paste the token again in the plugin's
+  settings; it stays on that device. The keychain is shared by every
+  installed plugin, which is why the id carries this plugin's full name.
 - **An env file in the vault.** A plain `KEY=value` file, by default
-  `06 AI Team/AI Team Knowledge/.env` (the "Env file" setting). The key is
-  `GITHUB_TOKEN`. Comment lines start with `#`; a value runs from the `=`
-  to the end of its line, so quotes would be part of it, and nothing is
-  interpolated. If the key appears twice the last line counts. Saving in
+  `06 AI Team/AI Team Knowledge/.env` (the "Env file" setting). The path is
+  relative to the vault root; an absolute path or a `..` segment is refused.
+  The key is `GITHUB_TOKEN`. Comment lines start with `#`; a value runs from
+  the `=` to the end of its line, so quotes would be part of it, and nothing
+  is interpolated. If the key appears twice the last line counts. Saving in
   this mode rewrites (or appends) that one line and leaves every other byte
   of the file as it was. On an Obsidian older than 1.11.4 this is the only
   choice and the dropdown is disabled.
