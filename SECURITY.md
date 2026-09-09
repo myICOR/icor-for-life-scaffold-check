@@ -14,7 +14,7 @@ Two channels, in order of preference:
 1. **GitHub private security advisory** (preferred). Go to the
    [Security tab](https://github.com/myICOR/icor-for-life-scaffold-check/security/advisories/new)
    of this repository and open a draft advisory.
-2. **Email** `team@myicor.com` with `SECURITY` and
+2. **Email** `support@myicor.com` with `SECURITY` and
    `icor-for-life-scaffold-check` in the subject line.
 
 A useful report contains the plugin version (`manifest.json`), your Obsidian
