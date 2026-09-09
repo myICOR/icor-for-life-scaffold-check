@@ -4,6 +4,63 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-09-09
+
+### Added
+- **Knowledge quality.** The check now shows how healthy the knowledge base
+  itself is, not only whether the scaffold's files are intact. The numbers
+  are measured by the scaffold's own `Scripts/check-quality.py --write`,
+  which ships with ICOR for Life Scaffold 1.18.0 and writes them to
+  `.icor-for-life/scripts/quality.json` (schema 1). This plugin never
+  measures: it reads that one file and shows it. Thirteen
+  metrics, from notes without a link and invented frontmatter fields to
+  orphans, dangling links and captures left sitting in the inbox.
+- **The report gains a "Knowledge quality" section**, between the severity
+  groups and "For your AI": the health in the heading, a metric table
+  (label, value, severity as text), the entity counts, and the findings
+  grouped under their metric, twenty per metric with a "+n more" line.
+  Each finding names the file, says what was found and says what to do.
+  Frontmatter gains `quality_health`, `quality_generated`, `quality_stale`
+  and one key per metric id, so a Base or a script can read the numbers
+  without opening the JSON. The "For your AI" prompt now ends by pointing
+  the AI at the quality section and SOP-1014, propose first, apply only
+  after you say yes.
+- **A dashboard.** A new view, "Open the Scaffold dashboard" in the command
+  palette and a button in the result window: both healths side by side, the
+  entity counts, and the metric table with a trend line per metric drawn
+  from the last thirty runs. The trend is one inline SVG path, no chart
+  library and no network. Severity is always a word beside the colour, the
+  table scrolls sideways inside its own box, and nothing needs a hover, so
+  the same view reads on a phone.
+- **Run history** at `.icor-for-life/icor-for-life-scaffold-check/history.json`
+  (schema 1), one record per completed run, capped at the last ninety. It is
+  state rather than a setting, so it lives in the machine layer and not in
+  `data.json`; it is regenerable and per device, and a missing or malformed
+  one starts fresh rather than failing.
+- `test/engine.test.mjs`: 13 gates for the quality reader and its two
+  renderers (with data, with none, with the wrong schema, with numbers gone
+  stale), the report frontmatter keys, and the run history (append, the
+  ninety cap, malformed recovery, the sparkline geometry). Each was watched
+  going red against a mutated copy of `main.js` before it was trusted.
+
+### Changed
+- No quality file yet is one sentence, in the report and on the dashboard,
+  saying how to get one: run `Scripts/check-quality.py --write` (ICOR for
+  Life Scaffold 1.18.0 or later) in the ICOR for Life Terminal, or ask your
+  AI to check your notes. A file carrying another schema is refused with one
+  sentence naming the schema seen and the one expected; a file that is not
+  valid JSON is refused the same way. None of them is an error, and none can
+  stop a check.
+- Numbers older than seven days are shown with a stale marker and their age.
+- A metric value of one reads with a singular unit ("1 day", not "1 days").
+  The script writes units in the plural; how a number reads is the plugin's
+  job.
+- `vaultFs` gained `write`, `mkdir` and `list`, so every read and write goes
+  through the one adapter wrapper instead of reaching for the adapter inline.
+  `mkdir` creates one level at a time and checks existence first, since the
+  hidden folder is not carried by Obsidian Sync and may not exist on a
+  second device.
+
 ## [0.3.0] - 2026-09-08
 
 ### Changed

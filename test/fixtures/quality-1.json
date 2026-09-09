@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "generated": "2026-09-09T08:30:00Z",
+  "scaffold_version": "1.17.0",
+  "health": "attention",
+  "counts": {
+    "journal": 412,
+    "notes": 96,
+    "documents": 31,
+    "people": 58,
+    "companies": 14,
+    "projects": 9,
+    "goals": 4,
+    "habits": 6,
+    "topics": 22,
+    "key_elements": 11,
+    "scratchpads": 3,
+    "inbox": 2
+  },
+  "metrics": [
+    { "id": "notes_missing_link", "label": "Notes without a link", "value": 7, "unit": "notes", "severity": "attention", "threshold": { "attention": 1, "broken": 50 }, "sop": "SOP-1014" },
+    { "id": "enum_violations", "label": "Enum violations", "value": 0, "unit": "fields", "severity": "ok", "threshold": { "attention": 1, "broken": 20 }, "sop": "SOP-1014" },
+    { "id": "missing_required_fields", "label": "Missing required fields", "value": 2, "unit": "notes", "severity": "attention", "threshold": { "attention": 1, "broken": 20 }, "sop": "SOP-1014" },
+    { "id": "invented_fields", "label": "Invented fields", "value": 0, "unit": "fields", "severity": "ok", "threshold": { "attention": 1, "broken": 20 }, "sop": "SOP-1014" },
+    { "id": "orphans", "label": "Orphans", "value": 3, "unit": "notes", "severity": "attention", "threshold": { "attention": 1, "broken": 100 }, "sop": "SOP-1014" },
+    { "id": "dangling_links", "label": "Dangling links", "value": 0, "unit": "links", "severity": "ok", "threshold": { "attention": 1, "broken": 50 }, "sop": "SOP-1014" },
+    { "id": "documents_without_file", "label": "Documents without a file", "value": 0, "unit": "notes", "severity": "ok", "threshold": { "attention": 1, "broken": 10 }, "sop": "SOP-1014" },
+    { "id": "unprocessed_scratchpads", "label": "Unprocessed scratchpads", "value": 3, "unit": "notes", "severity": "attention", "threshold": { "attention": 2, "broken": 14 }, "sop": "SOP-1014" },
+    { "id": "unprocessed_scratchpad_oldest_days", "label": "Oldest unprocessed scratchpad", "value": 4, "unit": "days", "severity": "attention", "threshold": { "attention": 2, "broken": 14 }, "sop": "SOP-1014" },
+    { "id": "unprocessed_captures", "label": "Unprocessed captures", "value": 2, "unit": "notes", "severity": "attention", "threshold": { "attention": 1, "broken": 30 }, "sop": "SOP-1014" },
+    { "id": "unprocessed_capture_oldest_days", "label": "Oldest unprocessed capture", "value": 1, "unit": "days", "severity": "ok", "threshold": { "attention": 3, "broken": 14 }, "sop": "SOP-1014" },
+    { "id": "unconsumed_references", "label": "Unconsumed references", "value": 0, "unit": "notes", "severity": "ok", "threshold": { "attention": 1, "broken": 30 }, "sop": "SOP-1014" },
+    { "id": "duplicate_entities", "label": "Duplicate entities", "value": 0, "unit": "pairs", "severity": "ok", "threshold": { "attention": 1, "broken": 5 }, "sop": "SOP-1014" }
+  ],
+  "findings": [
+    { "metric": "missing_required_fields", "severity": "attention", "path": "04 Inner World/Contacts/People/Alex Rivera.md", "message": "Required field `role` is empty.", "action": "Fill `role` in the frontmatter, or delete the note if Alex is not a real contact." },
+    { "metric": "missing_required_fields", "severity": "attention", "path": "04 Inner World/My Life/Goals/run-a-marathon.md", "message": "Required field `key_element` is missing.", "action": "Anchor the goal to a Key Element with `key_element: \"[[health]]\"`." },
+    { "metric": "notes_missing_link", "severity": "attention", "path": "04 Inner World/Notes/coffee-grinder-comparison.md", "message": "The note links to nothing in the vault.", "action": "Add one wikilink to the Project, Topic or Key Element the note belongs to." },
+    { "metric": "notes_missing_link", "severity": "attention", "path": "04 Inner World/Notes/mortgage-rates-2026.md", "message": "The note links to nothing in the vault.", "action": "Add one wikilink to the Project, Topic or Key Element the note belongs to." },
+    { "metric": "orphans", "severity": "attention", "path": "04 Inner World/My Life/Topics/sourdough.md", "message": "Nothing links to this note.", "action": "Link it from the Key Element it belongs to, or merge it into one that exists." },
+    { "metric": "unprocessed_scratchpads", "severity": "attention", "path": "00 Daily Scratchpad/2026-09-05.md", "message": "Scratchpad is 4 days old and not processed.", "action": "Run the capture pass (SOP-1014) or ask your AI to process the scratchpad." },
+    { "metric": "unprocessed_captures", "severity": "attention", "path": "01 Inbox/voice-memo-2026-09-08.md", "message": "Capture has sat in the inbox for 1 day.", "action": "File it into the room it belongs to, or delete it." }
+  ]
+}

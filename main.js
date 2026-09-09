@@ -21,12 +21,19 @@
  *          renamed agent is intact, not missing, and a contract without an
  *          id, with a malformed or placeholder one, or sharing one with
  *          another contract, is named.
- *   4. Writes the report as a note the user can act on, or hand to their AI.
+ *   4. Reads the KNOWLEDGE QUALITY numbers the scaffold's own script writes
+ *      to `.icor-for-life/scripts/quality.json` (0.4.0) and shows them in
+ *      the report and on a dashboard view, with a trend per metric from
+ *      this plugin's own run history. The script measures; this plugin
+ *      only reads.
+ *   5. Writes the report as a note the user can act on, or hand to their AI.
  *
  * What it never does: it never changes a scaffold file. The only things it
- * writes are the report note, its own data.json, and, when the GitHub token
- * is kept in an env file, that file's one GITHUB_TOKEN line. Files the
- * scaffold never shipped are yours and are not counted; extra is not drift.
+ * writes are the report note, its own data.json, its run history under
+ * `.icor-for-life/icor-for-life-scaffold-check/` (regenerable, per device),
+ * and, when the GitHub token is kept in an env file, that file's one
+ * GITHUB_TOKEN line. Files the scaffold never shipped are yours and are not
+ * counted; extra is not drift.
  *
  * The token (0.3.0) lives in Obsidian's keychain (`app.secretStorage`) or,
  * by choice or on an Obsidian without one, in a KEY=value env file in the
@@ -369,10 +376,206 @@ async function runChecks({ fs, hash, remote, local, installedVersion, configDir 
   return { health, installedVersion: installed, latestVersion: latest, findings, counts };
 }
 
+/* ---------------------------------------------- knowledge quality ---- */
+/*
+ * The scaffold's `Scripts/check-quality.py --write` measures the vault's
+ * knowledge base (notes without a link, invented frontmatter fields,
+ * orphans, unprocessed captures, ...) and writes the numbers to
+ * `.icor-for-life/scripts/quality.json`, schema 1 (GL-1008: the machine
+ * layer). This plugin never measures; it reads that one file and shows it,
+ * in the report and on the dashboard. A missing file means "not run yet"
+ * and is one sentence, not an error. A file with another schema, or one
+ * that is not JSON, is refused with one sentence and never thrown. A file
+ * older than seven days is shown with a stale marker.
+ */
+
+const PLUGIN_ID = 'icor-for-life-scaffold-check';
+const QUALITY_PATH = META_DIR + '/scripts/quality.json';
+const HISTORY_DIR = META_DIR + '/' + PLUGIN_ID;
+const HISTORY_PATH = HISTORY_DIR + '/history.json';
+const QUALITY_SCHEMA = 1;
+const QUALITY_STALE_MS = 7 * 24 * 60 * 60 * 1000;
+const QUALITY_FINDINGS_PER_METRIC = 20;
+const QUALITY_HEALTHS = ['ok', 'attention', 'broken'];
+/* The metric ids the script writes, in the order the report shows them.
+   A metric the script adds later is shown after these; one it drops is
+   simply absent. Nothing here is required. */
+const QUALITY_METRIC_IDS = ['notes_missing_link', 'enum_violations', 'missing_required_fields', 'invented_fields', 'orphans', 'dangling_links', 'documents_without_file', 'unprocessed_scratchpads', 'unprocessed_scratchpad_oldest_days', 'unprocessed_captures', 'unprocessed_capture_oldest_days', 'unconsumed_references', 'duplicate_entities'];
+const QUALITY_COUNT_LABELS = { journal: 'Journal', notes: 'Notes', documents: 'Documents', people: 'People', companies: 'Companies', projects: 'Projects', goals: 'Goals', habits: 'Habits', topics: 'Topics', key_elements: 'Key elements', scratchpads: 'Scratchpads', inbox: 'Inbox' };
+const NO_QUALITY_DATA = 'No knowledge quality data exists yet: run `Scripts/check-quality.py --write` (ICOR for Life Scaffold 1.18.0 or later) in the ICOR for Life Terminal, or ask your AI "check my notes", and the next Scaffold Check will show the numbers here.';
+/* Severity as text, never an emoji: a report is read in the terminal and
+   by screen readers as often as in Obsidian. */
+const SEVERITY_GLYPH = { ok: 'ok', attention: '(!) attention', broken: '(x) broken' };
+const QUALITY_TEXT = { ok: 'Knowledge ok', attention: 'Knowledge: attention', broken: 'Knowledge: broken', unknown: 'Knowledge: no data' };
+
+const asText = (v) => (typeof v === 'string' ? v : v == null ? '' : String(v));
+const asNumber = (v) => (typeof v === 'number' && Number.isFinite(v) ? v : (typeof v === 'string' && v.trim() !== '' && Number.isFinite(Number(v)) ? Number(v) : null));
+/* A metric id is also a frontmatter key, so it must look like one. */
+const METRIC_ID = /^[a-z][a-z0-9_]{0,63}$/;
+
+/* An empty quality result: status says why there is no data. */
+function noQuality(status, message) {
+  return { status, message, health: 'unknown', generated: null, ageDays: null, stale: false, scaffoldVersion: null, counts: {}, metrics: [], findings: [] };
+}
+
+/*
+ * parseQuality(text, { now }) -> { status, message, health, generated,
+ * ageDays, stale, scaffoldVersion, counts, metrics, findings }
+ *
+ * status: 'ok' (data follows), 'missing' (text was null: the script has
+ * not run), 'invalid' (not JSON, or not an object), 'wrong-schema' (the
+ * schema integer is not the one this plugin reads). Every field is
+ * normalised: a metric without an id is dropped, a value that is not a
+ * number is null, an unknown severity reads as 'ok' for a metric and
+ * 'attention' for a finding. Never throws.
+ */
+function parseQuality(text, opts) {
+  const o = Object.assign({ now: new Date() }, opts || {});
+  if (text == null) return noQuality('missing', NO_QUALITY_DATA);
+  const badJson = '`' + QUALITY_PATH + '` is not valid JSON, so the quality data is not shown; run `Scripts/check-quality.py --write` again to rewrite it.';
+  let raw;
+  try { raw = JSON.parse(String(text)); } catch (e) { return noQuality('invalid', badJson); }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return noQuality('invalid', badJson);
+  if (raw.schema !== QUALITY_SCHEMA) {
+    const seen = raw.schema === undefined ? 'no schema' : 'schema ' + JSON.stringify(raw.schema);
+    return noQuality('wrong-schema', '`' + QUALITY_PATH + '` carries ' + seen + ' and this plugin reads schema ' + QUALITY_SCHEMA + ', so the quality data is not shown; update the plugin or the script so the two agree.');
+  }
+  const health = QUALITY_HEALTHS.includes(raw.health) ? raw.health : 'unknown';
+  const generated = typeof raw.generated === 'string' && raw.generated.trim() ? raw.generated.trim() : null;
+  const t = generated ? Date.parse(generated) : NaN;
+  const ageMs = Number.isFinite(t) ? o.now.getTime() - t : null;
+  const ageDays = ageMs === null ? null : Math.max(0, Math.floor(ageMs / 86400000));
+  const stale = ageMs === null || ageMs > QUALITY_STALE_MS;
+  const counts = {};
+  if (raw.counts && typeof raw.counts === 'object') {
+    for (const k of Object.keys(raw.counts)) { const n = asNumber(raw.counts[k]); if (n !== null && METRIC_ID.test(k)) counts[k] = n; }
+  }
+  const metrics = [];
+  const seenIds = new Set();
+  for (const m of Array.isArray(raw.metrics) ? raw.metrics : []) {
+    if (!m || typeof m !== 'object' || typeof m.id !== 'string' || !METRIC_ID.test(m.id) || seenIds.has(m.id)) continue;
+    seenIds.add(m.id);
+    const th = m.threshold && typeof m.threshold === 'object' ? { attention: asNumber(m.threshold.attention), broken: asNumber(m.threshold.broken) } : null;
+    metrics.push({ id: m.id, label: asText(m.label).trim() || m.id, value: asNumber(m.value), unit: asText(m.unit).trim(), severity: QUALITY_HEALTHS.includes(m.severity) ? m.severity : 'ok', threshold: th, sop: asText(m.sop).trim() });
+  }
+  const findings = [];
+  for (const f of Array.isArray(raw.findings) ? raw.findings : []) {
+    if (!f || typeof f !== 'object') continue;
+    findings.push({ metric: asText(f.metric), severity: QUALITY_HEALTHS.includes(f.severity) ? f.severity : 'attention', path: asText(f.path), message: asText(f.message), action: asText(f.action) });
+  }
+  return { status: 'ok', message: '', health, generated, ageDays, stale, scaffoldVersion: asText(raw.scaffold_version) || null, counts, metrics, findings };
+}
+
+/* The quality file through the engine's fs interface: absent is
+   'missing', unreadable is 'invalid'. Never throws. */
+async function loadQuality(fs, opts) {
+  let present = false;
+  try { present = await fs.exists(QUALITY_PATH); } catch (e) { present = false; }
+  if (!present) return parseQuality(null, opts);
+  let text;
+  try { text = await fs.read(QUALITY_PATH); } catch (e) { return noQuality('invalid', '`' + QUALITY_PATH + '` exists but could not be read, so the quality data is not shown.'); }
+  return parseQuality(text, opts);
+}
+
+/* "7 notes", "1 day", "4 days", "0". The script writes the unit in the
+   plural, so a value of one is singularised here: presentation is the
+   plugin's job, not the script's. A unit ending in "ss" is left alone. */
+function metricValueText(m) {
+  if (m.value === null) return 'unknown';
+  if (!m.unit) return String(m.value);
+  const unit = m.value === 1 && /[^s]s$/.test(m.unit) ? m.unit.slice(0, -1) : m.unit;
+  return String(m.value) + ' ' + unit;
+}
+
+/* The metrics in QUALITY_METRIC_IDS order, then any the script added. */
+function orderedMetrics(q) {
+  const known = QUALITY_METRIC_IDS.map((id) => q.metrics.find((m) => m.id === id)).filter(Boolean);
+  const extra = q.metrics.filter((m) => !QUALITY_METRIC_IDS.includes(m.id));
+  return known.concat(extra);
+}
+
+/* One line for the counts: "Journal 412, Notes 96, ...". '' when none. */
+function countsText(q) {
+  const parts = [];
+  for (const k of Object.keys(QUALITY_COUNT_LABELS)) if (k in q.counts) parts.push(QUALITY_COUNT_LABELS[k] + ' ' + q.counts[k]);
+  for (const k of Object.keys(q.counts)) if (!(k in QUALITY_COUNT_LABELS)) parts.push(k + ' ' + q.counts[k]);
+  return parts.join(', ');
+}
+
+/* The frontmatter keys the report carries for the quality data, so a Base
+   or a script can read them without opening quality.json: quality_health,
+   quality_generated, quality_stale, then one key per metric id with its
+   value. Without data the first two say so and the rest are absent. */
+function qualityFrontmatter(q) {
+  const L = [];
+  if (!q || q.status !== 'ok') { L.push('quality_health: unknown'); L.push('quality_generated: unknown'); return L; }
+  L.push('quality_health: ' + q.health);
+  L.push('quality_generated: ' + (q.generated || 'unknown'));
+  L.push('quality_stale: ' + (q.stale ? 'true' : 'false'));
+  for (const m of orderedMetrics(q)) if (m.value !== null) L.push(m.id + ': ' + m.value);
+  return L;
+}
+
+/* The "Knowledge quality" section of the report as lines: the heading with
+   the health, the stale marker when the numbers are old, the metric table,
+   the counts, and the findings grouped by metric (twenty per metric, then a
+   "+n more" line), in the report's own idiom. Without data the section is
+   the one sentence that says how to get some. */
+function renderQuality(q) {
+  const L = [];
+  if (!q || q.status !== 'ok') {
+    L.push('## Knowledge quality (' + (q && q.status !== 'missing' ? 'unreadable' : 'no data yet') + ')');
+    L.push('');
+    L.push(q ? q.message : NO_QUALITY_DATA);
+    L.push('');
+    return L;
+  }
+  L.push('## Knowledge quality (' + q.health + ')');
+  L.push('');
+  const when = q.generated ? 'on ' + q.generated : 'at an unknown time';
+  const version = q.scaffoldVersion ? ' against scaffold ' + q.scaffoldVersion : '';
+  L.push('Measured by `Scripts/check-quality.py` ' + when + version + '. This check only reads the numbers; the script measures.');
+  if (q.stale) {
+    L.push('');
+    L.push('**Stale:** ' + (q.ageDays === null ? 'the file carries no readable `generated` date' : 'the numbers are ' + q.ageDays + ' days old') + '. Run `Scripts/check-quality.py --write` again for current ones.');
+  }
+  L.push('');
+  const metrics = orderedMetrics(q);
+  if (metrics.length) {
+    L.push('| Metric | Value | Severity |');
+    L.push('|---|---|---|');
+    for (const m of metrics) L.push('| ' + m.label + ' | ' + metricValueText(m) + ' | ' + (SEVERITY_GLYPH[m.severity] || m.severity) + ' |');
+    L.push('');
+  }
+  const counted = countsText(q);
+  if (counted) { L.push('Counted: ' + counted + '.'); L.push(''); }
+
+  const byMetric = new Map();
+  for (const f of q.findings) { if (!byMetric.has(f.metric)) byMetric.set(f.metric, []); byMetric.get(f.metric).push(f); }
+  const order = metrics.map((m) => m.id).concat([...byMetric.keys()].filter((id) => !metrics.some((m) => m.id === id)));
+  for (const id of order) {
+    const rows = byMetric.get(id);
+    if (!rows || !rows.length) continue;
+    const m = metrics.find((x) => x.id === id);
+    L.push('### ' + (m ? m.label : id) + ' (' + rows.length + ')');
+    L.push('');
+    if (m && m.sop) { L.push('Repair procedure: ' + m.sop + '.'); L.push(''); }
+    for (const f of rows.slice(0, QUALITY_FINDINGS_PER_METRIC)) {
+      L.push('- **`' + f.path + '`** ' + f.message);
+      L.push('  - Do: ' + f.action);
+    }
+    if (rows.length > QUALITY_FINDINGS_PER_METRIC) L.push('- +' + (rows.length - QUALITY_FINDINGS_PER_METRIC) + ' more in `' + QUALITY_PATH + '`');
+    L.push('');
+  }
+  return L;
+}
+
 /* The report note. Frontmatter carries the numbers so a Base or a script can
-   read it; the body is for the person, grouped by what to do. */
+   read it; the body is for the person, grouped by what to do. opts.quality
+   is a parseQuality() result; absent, the quality section says there is no
+   data yet. */
 function renderReport(result, opts) {
-  const o = Object.assign({ now: new Date(), manifestUrl: '', vaultName: '' }, opts || {});
+  const o = Object.assign({ now: new Date(), manifestUrl: '', vaultName: '', quality: null }, opts || {});
   const stamp = o.now.toISOString().slice(0, 10);
   const L = [];
   L.push('---');
@@ -384,6 +587,7 @@ function renderReport(result, opts) {
   L.push('broken: ' + result.counts.broken);
   L.push('attention: ' + result.counts.attention);
   L.push('info: ' + result.counts.info);
+  for (const line of qualityFrontmatter(o.quality)) L.push(line);
   L.push('---');
   L.push('');
   L.push('# Scaffold Check, ' + stamp);
@@ -433,12 +637,14 @@ function renderReport(result, opts) {
     }
   }
 
+  for (const line of renderQuality(o.quality)) L.push(line);
+
   L.push('## For your AI');
   L.push('');
   L.push('Paste this into your AI session to have the fixes done for you. Everything above is the input; nothing here changes a file on its own.');
   L.push('');
   L.push('```');
-  L.push('Read the Scaffold Check report at the path of this note. Fix every Broken item, then every Attention item, in order. Rules: never overwrite a file the report says I edited; for a leftover, delete it only after reading the changelog line the report cites; for a missing canonical file, copy it from the latest ICOR for Life Scaffold; never change or reuse a `myicor_id`, an agent keeps its id for life. Show me each change before you make it.');
+  L.push('Read the Scaffold Check report at the path of this note. Fix every Broken item, then every Attention item, in order. Rules: never overwrite a file the report says I edited; for a leftover, delete it only after reading the changelog line the report cites; for a missing canonical file, copy it from the latest ICOR for Life Scaffold; never change or reuse a `myicor_id`, an agent keeps its id for life. Show me each change before you make it. Then read the Knowledge quality section and run SOP-1014 for what it lists; propose repairs, apply only after I say yes.');
   L.push('```');
   L.push('');
   if (o.manifestUrl) {
@@ -448,7 +654,95 @@ function renderReport(result, opts) {
   return L.join('\n');
 }
 
-const engine = { parseVersion, compareVersions, baseFolders, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4 };
+/* ------------------------------------------------------ run history ---- */
+/*
+ * One record per completed run, appended to
+ * `.icor-for-life/icor-for-life-scaffold-check/history.json` (this
+ * plugin's own subfolder of the machine layer, GL-1008), capped at the
+ * last ninety. It is state, not a setting: data.json keeps the settings
+ * and the two status-bar fields, this file feeds the dashboard's trend
+ * lines. The file is regenerable and per device; a missing or malformed
+ * one starts fresh and never throws.
+ */
+
+const HISTORY_SCHEMA = 1;
+const HISTORY_CAP = 90;
+
+function emptyHistory() { return { schema: HISTORY_SCHEMA, runs: [] }; }
+
+/* The history file's text -> { schema: 1, runs }. null (absent), broken
+   JSON, another schema or a shape without a runs array all start fresh;
+   a run without an `at` string is dropped. */
+function parseHistory(text) {
+  if (text == null) return emptyHistory();
+  let raw;
+  try { raw = JSON.parse(String(text)); } catch (e) { return emptyHistory(); }
+  if (!raw || typeof raw !== 'object' || raw.schema !== HISTORY_SCHEMA || !Array.isArray(raw.runs)) return emptyHistory();
+  return { schema: HISTORY_SCHEMA, runs: raw.runs.filter((r) => r && typeof r === 'object' && typeof r.at === 'string') };
+}
+
+async function loadHistory(fs) {
+  let present = false;
+  try { present = await fs.exists(HISTORY_PATH); } catch (e) { present = false; }
+  if (!present) return emptyHistory();
+  let text = null;
+  try { text = await fs.read(HISTORY_PATH); } catch (e) { text = null; }
+  return parseHistory(text);
+}
+
+/* The record for one run: the scaffold result plus the quality numbers
+   that were on disk at the time (an empty `metrics` when there were none). */
+function runRecord(result, quality, now) {
+  const metrics = {};
+  if (quality && quality.status === 'ok') for (const m of quality.metrics) if (m.value !== null) metrics[m.id] = m.value;
+  return {
+    at: (now || new Date()).toISOString(),
+    health: result.health,
+    broken: result.counts.broken,
+    attention: result.counts.attention,
+    info: result.counts.info,
+    quality_health: quality && quality.status === 'ok' ? quality.health : 'unknown',
+    metrics,
+  };
+}
+
+/* history + record -> a new history holding the last HISTORY_CAP runs.
+   The input is taken through parseHistory's rules, so a caller can hand
+   it anything and still get a well-formed file back. */
+function appendRun(history, record) {
+  const h = history && typeof history === 'object' && history.schema === HISTORY_SCHEMA && Array.isArray(history.runs) ? parseHistory(JSON.stringify(history)) : emptyHistory();
+  const runs = h.runs.concat([record]);
+  return { schema: HISTORY_SCHEMA, runs: runs.slice(Math.max(0, runs.length - HISTORY_CAP)) };
+}
+
+/* One metric's values over the last `limit` runs, oldest first, skipping
+   runs that did not carry it. */
+function metricSeries(history, id, limit) {
+  const runs = (history && Array.isArray(history.runs) ? history.runs : []).slice(-(limit || 30));
+  const out = [];
+  for (const r of runs) { const v = r.metrics && asNumber(r.metrics[id]); if (v !== null && v !== undefined) out.push(v); }
+  return out;
+}
+
+/* The `d` of an SVG path for a sparkline over `values`, left to right,
+   inside width x height with a one unit margin. One value draws as a flat
+   line; a series that never changes sits at mid height. '' for no values,
+   so a caller can skip the SVG. */
+function sparklinePath(values, width, height) {
+  const v = (values || []).filter((n) => typeof n === 'number' && Number.isFinite(n));
+  if (!v.length) return '';
+  const w = width || 60, h = height || 16, pad = 1;
+  const pts = v.length === 1 ? [v[0], v[0]] : v;
+  const min = Math.min(...pts), max = Math.max(...pts);
+  const step = (w - 2 * pad) / (pts.length - 1);
+  return pts.map((n, i) => {
+    const x = pad + i * step;
+    const y = max === min ? h / 2 : pad + (h - 2 * pad) * (1 - (n - min) / (max - min));
+    return (i ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+}
+
+const engine = { parseVersion, compareVersions, baseFolders, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS };
 
 /* ============================================= where the token lives ===== */
 /*
@@ -625,7 +919,9 @@ const secrets = { SECRET_ID, ENV_KEY, DEFAULT_ENV_FILE, BACKEND_STORE, BACKEND_E
 /* ======================================================= the plugin ===== */
 
 if (obsidian) {
-  const { Plugin, PluginSettingTab, Setting, Notice, Modal, requestUrl, normalizePath } = obsidian;
+  const { Plugin, PluginSettingTab, Setting, Notice, Modal, ItemView, requestUrl, normalizePath } = obsidian;
+
+  const VIEW_TYPE = 'icor-scaffold-dashboard';
 
   const DEFAULTS = {
     manifestUrl: DEFAULT_MANIFEST_URL,
@@ -655,27 +951,43 @@ if (obsidian) {
      which the file index does not hold. */
   function vaultFs(app) {
     const adapter = app.vault.adapter;
-    return {
+    const self = {
       exists: (p) => adapter.exists(normalizePath(p)),
       read: (p) => adapter.read(normalizePath(p)),
       readBinary: (p) => adapter.readBinary(normalizePath(p)),
+      write: (p, text) => adapter.write(normalizePath(p), text),
+      /* `mkdir` of a folder that is already there throws on some adapters,
+         so existence is checked first. One level at a time, because the
+         adapter does not create parents (GL-1008: never assume the folder
+         exists). */
+      mkdir: async (p) => {
+        const parts = normalizePath(p).split('/').filter(Boolean);
+        let at = '';
+        for (const part of parts) {
+          at = at ? at + '/' + part : part;
+          if (!(await adapter.exists(at))) await adapter.mkdir(at);
+        }
+      },
+      /* `adapter.list` answers with paths already prefixed by the folder,
+         so callers compare on the full path and never rejoin. */
+      list: async (p) => {
+        const dir = normalizePath(p);
+        if (!(await adapter.exists(dir))) return { files: [], folders: [] };
+        const r = await adapter.list(dir);
+        return { files: (r && r.files) || [], folders: (r && r.folders) || [] };
+      },
       listBases: async () => app.vault.getFiles().filter((f) => f.extension === 'base' && !f.path.startsWith(app.vault.configDir + '/')).map((f) => f.path),
       listAgentContracts: async () => {
-        const dir = normalizePath(AGENTS_DIR);
-        if (!(await adapter.exists(dir))) return [];
         const out = [];
-        for (const folder of (await adapter.list(dir)).folders) {
+        for (const folder of (await self.list(AGENTS_DIR)).folders) {
           const p = normalizePath(folder + '/AGENT.md');
           if (await adapter.exists(p)) out.push(p);
         }
         return out;
       },
-      listShims: async () => {
-        const dir = normalizePath('.claude/agents');
-        if (!(await adapter.exists(dir))) return [];
-        return (await adapter.list(dir)).files.filter((p) => p.endsWith('.md')).map((p) => normalizePath(p));
-      },
+      listShims: async () => (await self.list('.claude/agents')).files.filter((p) => p.endsWith('.md')).map((p) => normalizePath(p)),
     };
+    return self;
   }
 
   class ScaffoldCheckPlugin extends Plugin {
@@ -684,6 +996,7 @@ if (obsidian) {
       /* A hand-edited data.json cannot point outside the vault either. */
       this.settings.envFilePath = normalizeEnvFilePath(this.settings.envFilePath).path || DEFAULT_ENV_FILE;
       this.lastResult = null;
+      this.lastQuality = null;
       this.store = new SecretStore(this.app.secretStorage);
       if (migrateToken(this.settings, this.store, this.backend())) await this.saveData(this.settings);
 
@@ -692,9 +1005,11 @@ if (obsidian) {
       this.statusEl.addEventListener('click', () => this.showResult());
       this.paintStatus(this.settings.lastHealth || 'unknown');
 
+      this.registerView(VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
       this.addRibbonIcon('shield-check', 'Scaffold Check', () => this.run({ interactive: true }));
       this.addCommand({ id: 'run', name: 'Run the Scaffold Check', callback: () => this.run({ interactive: true }) });
       this.addCommand({ id: 'show', name: 'Show the last Scaffold Check result', callback: () => this.showResult() });
+      this.addCommand({ id: 'dashboard', name: 'Open the Scaffold dashboard', callback: () => this.openDashboard() });
       this.addSettingTab(new ScaffoldCheckSettingTab(this.app, this));
 
       if (this.settings.runOnStartup) {
@@ -763,12 +1078,54 @@ if (obsidian) {
       this.settings.lastRun = new Date().toISOString();
       await this.saveData(this.settings);
 
+      /* The quality numbers are read here, outside the engine's gates: the
+         script measures, this plugin shows. loadQuality never throws. */
+      const quality = await engine.loadQuality(fs);
+      this.lastQuality = quality;
+
       if (this.settings.writeReport) {
-        try { await this.writeReport(result); } catch (e) { if (interactive) new Notice('Scaffold Check: could not write the report (' + e.message + ')'); }
+        try { await this.writeReport(result, quality); } catch (e) { if (interactive) new Notice('Scaffold Check: could not write the report (' + e.message + ')'); }
       }
+      try { await this.appendHistory(result, quality); } catch (e) { if (interactive) new Notice('Scaffold Check: could not write the run history, so the dashboard trend misses this run.'); }
+      this.refreshDashboard();
       if (interactive) this.showResult();
       else if (result.health !== 'ok') new Notice('Scaffold Check: ' + result.counts.broken + ' broken, ' + result.counts.attention + ' to do. Click the status bar for the report.');
       return result;
+    }
+
+    /* ---- the machine layer: quality.json (read) and history.json (ours) ---- */
+
+    /* The quality file as parseQuality sees it. Read fresh every time: no
+       vault event fires for a hidden folder (GL-1008). */
+    readQuality() { return engine.loadQuality(vaultFs(this.app)); }
+    readHistory() { return engine.loadHistory(vaultFs(this.app)); }
+
+    /* One record per completed run into this plugin's own subfolder of
+       `.icor-for-life/`, created on first write; never a path outside it. */
+    async appendHistory(result, quality) {
+      const fs = vaultFs(this.app);
+      const next = engine.appendRun(await engine.loadHistory(fs), engine.runRecord(result, quality));
+      await fs.mkdir(HISTORY_DIR);
+      await fs.write(HISTORY_PATH, JSON.stringify(next, null, 2) + '\n');
+    }
+
+    /* ---- the dashboard ---- */
+
+    async openDashboard() {
+      const ws = this.app.workspace;
+      const open = ws.getLeavesOfType(VIEW_TYPE);
+      let leaf = open.length ? open[0] : null;
+      if (!leaf) {
+        leaf = ws.getLeaf(true);
+        await leaf.setViewState({ type: VIEW_TYPE, active: true });
+      }
+      ws.revealLeaf(leaf);
+    }
+
+    refreshDashboard() {
+      for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+        if (leaf.view && typeof leaf.view.render === 'function') leaf.view.render();
+      }
     }
 
     /* ---- the token: one backend at a time, never a fallback ---- */
@@ -848,14 +1205,14 @@ if (obsidian) {
       }
     }
 
-    async writeReport(result) {
+    async writeReport(result, quality) {
       const folder = normalizePath(this.settings.reportFolder || DEFAULT_REPORT_FOLDER);
-      const adapter = this.app.vault.adapter;
-      if (!(await adapter.exists(folder))) await adapter.mkdir(folder);
+      const fs = vaultFs(this.app);
+      await fs.mkdir(folder);
       const stamp = new Date().toISOString().slice(0, 10);
       const path = normalizePath(folder + '/' + stamp + '-scaffold-check.md');
-      const text = engine.renderReport(result, { manifestUrl: this.settings.manifestUrl });
-      await adapter.write(path, text);
+      const text = engine.renderReport(result, { manifestUrl: this.settings.manifestUrl, quality: quality || null });
+      await fs.write(path, text);
       this.lastReportPath = path;
     }
 
@@ -890,15 +1247,130 @@ if (obsidian) {
         }
         if (rows.length > 40) c.createEl('p', { text: (rows.length - 40) + ' more in the report.' });
       }
+      const q = this.plugin.lastQuality;
+      const qp = c.createEl('p', { cls: 'icor-scaffold-meta' });
+      qp.setText(q && q.status === 'ok' ? QUALITY_TEXT[q.health] + (q.stale ? ' (stale)' : '') + ' · ' + q.findings.length + ' findings in the report' : QUALITY_TEXT.unknown);
       const foot = c.createDiv({ cls: 'icor-scaffold-foot' });
       if (this.plugin.lastReportPath) {
         const b = foot.createEl('button', { text: 'Open the report' });
         b.addEventListener('click', () => { this.app.workspace.openLinkText(this.plugin.lastReportPath, '', true); this.close(); });
       }
+      const dash = foot.createEl('button', { text: 'Open the dashboard' });
+      dash.addEventListener('click', () => { this.close(); this.plugin.openDashboard(); });
       const again = foot.createEl('button', { text: 'Run again' });
       again.addEventListener('click', () => { this.close(); this.plugin.run({ interactive: true }); });
     }
     onClose() { this.contentEl.empty(); }
+  }
+
+  /* The dashboard: one ItemView that renders from the JSON on disk (the
+     quality file the script writes, the history file this plugin writes)
+     and from the last result in memory. Everything is text with a colour
+     beside it, never a colour alone, and nothing needs a hover: the same
+     view on a phone. No library, no network, no chart runtime; the trend
+     is one inline SVG path per metric. */
+  class DashboardView extends ItemView {
+    constructor(leaf, plugin) { super(leaf); this.plugin = plugin; }
+    getViewType() { return VIEW_TYPE; }
+    getDisplayText() { return 'Scaffold dashboard'; }
+    getIcon() { return 'shield-check'; }
+    async onOpen() { await this.render(); }
+    async onClose() { this.contentEl.empty(); }
+
+    async render() {
+      const plugin = this.plugin;
+      const s = plugin.settings;
+      let quality, history;
+      try { quality = await plugin.readQuality(); } catch (e) { quality = engine.parseQuality(null); }
+      try { history = await plugin.readHistory(); } catch (e) { history = engine.parseHistory(null); }
+      const c = this.contentEl;
+      c.empty();
+      c.addClass('icor-scaffold-dashboard');
+      c.createEl('h2', { text: 'Scaffold dashboard' });
+
+      /* header: the two healths side by side */
+      const tiles = c.createDiv({ cls: 'icor-scaffold-tiles' });
+      const r = plugin.lastResult;
+      const scaffoldHealth = r ? r.health : (s.lastHealth || 'unknown');
+      const t1 = tiles.createDiv({ cls: 'icor-scaffold-tile' });
+      t1.createDiv({ cls: 'icor-scaffold-tile-label', text: 'Scaffold' });
+      const h1 = t1.createDiv({ cls: 'icor-scaffold-head' });
+      h1.createSpan({ cls: 'icor-scaffold-dot icor-scaffold-dot-' + scaffoldHealth, attr: { 'aria-hidden': 'true' } });
+      h1.createSpan({ text: STATUS_TEXT[scaffoldHealth] || STATUS_TEXT.unknown });
+      t1.createDiv({ cls: 'icor-scaffold-meta', text: r
+        ? r.counts.broken + ' broken · ' + r.counts.attention + ' attention · ' + r.counts.info + ' info · installed ' + (r.installedVersion || 'unknown') + ', latest ' + (r.latestVersion || 'unknown')
+        : (s.lastRun ? 'Last run ' + s.lastRun.slice(0, 10) + '. Run the check for the details.' : 'Not run yet.') });
+
+      const qh = quality.status === 'ok' ? quality.health : 'unknown';
+      const t2 = tiles.createDiv({ cls: 'icor-scaffold-tile' });
+      t2.createDiv({ cls: 'icor-scaffold-tile-label', text: 'Knowledge quality' });
+      const h2 = t2.createDiv({ cls: 'icor-scaffold-head' });
+      h2.createSpan({ cls: 'icor-scaffold-dot icor-scaffold-dot-' + qh, attr: { 'aria-hidden': 'true' } });
+      h2.createSpan({ text: QUALITY_TEXT[qh] || QUALITY_TEXT.unknown });
+      if (quality.stale) h2.createSpan({ cls: 'icor-scaffold-stale', text: 'stale' });
+      t2.createDiv({ cls: 'icor-scaffold-meta', text: quality.status === 'ok'
+        ? 'Measured ' + (quality.generated || 'at an unknown time') + (quality.ageDays !== null ? ' (' + quality.ageDays + ' days ago)' : '') + (quality.scaffoldVersion ? ' · scaffold ' + quality.scaffoldVersion : '') + ' · ' + quality.findings.length + ' findings'
+        : 'Nothing measured yet.' });
+
+      /* no data, or data this plugin cannot read: the one sentence */
+      if (quality.status !== 'ok') {
+        c.createEl('p', { cls: 'icor-scaffold-notice', text: quality.message });
+      }
+
+      /* the counts row */
+      const countKeys = Object.keys(quality.counts);
+      if (countKeys.length) {
+        const row = c.createDiv({ cls: 'icor-scaffold-counts' });
+        const ordered = Object.keys(QUALITY_COUNT_LABELS).filter((k) => k in quality.counts).concat(countKeys.filter((k) => !(k in QUALITY_COUNT_LABELS)));
+        for (const k of ordered) {
+          const chip = row.createSpan({ cls: 'icor-scaffold-chip' });
+          chip.createSpan({ cls: 'icor-scaffold-chip-n', text: String(quality.counts[k]) });
+          chip.createSpan({ text: ' ' + (QUALITY_COUNT_LABELS[k] || k) });
+        }
+      }
+
+      /* the metric table with a trend per row */
+      const metrics = engine.orderedMetrics(quality);
+      if (metrics.length) {
+        const wrap = c.createDiv({ cls: 'icor-scaffold-tablewrap' });
+        const table = wrap.createEl('table', { cls: 'icor-scaffold-metrics' });
+        const hr = table.createEl('thead').createEl('tr');
+        for (const h of ['Metric', 'Value', 'Severity', 'Trend']) hr.createEl('th', { text: h });
+        const body = table.createEl('tbody');
+        for (const m of metrics) {
+          const tr = body.createEl('tr', { cls: 'icor-scaffold-sev-' + m.severity });
+          tr.createEl('td', { text: m.label });
+          tr.createEl('td', { cls: 'icor-scaffold-num', text: engine.metricValueText(m) });
+          const sev = tr.createEl('td', { cls: 'icor-scaffold-sevcell' });
+          sev.createSpan({ cls: 'icor-scaffold-dot icor-scaffold-dot-' + m.severity, attr: { 'aria-hidden': 'true' } });
+          sev.createSpan({ text: m.severity });
+          const trend = tr.createEl('td', { cls: 'icor-scaffold-trend' });
+          const series = engine.metricSeries(history, m.id, 30);
+          if (series.length >= 2) {
+            const label = 'Last ' + series.length + ' runs, from ' + series[0] + ' to ' + series[series.length - 1];
+            const svg = trend.createSvg('svg', { cls: 'icor-scaffold-spark', attr: { viewBox: '0 0 60 16', width: '60', height: '16', role: 'img', 'aria-label': label } });
+            svg.createSvg('title').textContent = label;
+            svg.createSvg('path', { attr: { d: engine.sparklinePath(series, 60, 16), fill: 'none', stroke: 'currentColor', 'stroke-width': '1.5', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' } });
+            trend.createSpan({ cls: 'icor-scaffold-trend-text', text: ' ' + series[0] + ' to ' + series[series.length - 1] });
+          } else {
+            trend.createSpan({ cls: 'icor-scaffold-meta', text: series.length === 1 ? 'one run' : 'no runs yet' });
+          }
+        }
+      }
+
+      const runs = history.runs.length;
+      c.createEl('p', { cls: 'icor-scaffold-meta', text: runs ? runs + ' run' + (runs === 1 ? '' : 's') + ' recorded, the last ' + Math.min(runs, 30) + ' drawn.' : 'No runs recorded yet; the trend fills in from the next check.' });
+
+      const foot = c.createDiv({ cls: 'icor-scaffold-foot' });
+      const runBtn = foot.createEl('button', { text: 'Run the check' });
+      runBtn.addEventListener('click', () => plugin.run({ interactive: true }));
+      if (plugin.lastReportPath) {
+        const b = foot.createEl('button', { text: 'Open the report' });
+        b.addEventListener('click', () => plugin.app.workspace.openLinkText(plugin.lastReportPath, '', true));
+      }
+      const again = foot.createEl('button', { text: 'Refresh' });
+      again.addEventListener('click', () => this.render());
+    }
   }
 
   /* The settings tab. The token row is a password input plus Save: the input

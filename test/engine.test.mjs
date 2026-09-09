@@ -11,6 +11,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const { engine } = require('../main.js');
@@ -451,4 +452,253 @@ test('RED: configDir is honoured for plugins, appearance and snippets; the defau
   /* and without the option the same vault reads as a bare one: plugin not installed under .obsidian */
   const r2 = await run(files);
   assert.ok(r2.findings.some((x) => x.kind === 'plugin' && x.path === '.obsidian/plugins/icor-for-life-connect'));
+});
+
+/* ============================================== knowledge quality ===== */
+/*
+ * The quality numbers are measured by the scaffold's own script and only
+ * READ here (GL-1005: code measures, the plugin shows). These gates hold
+ * the reader and the two renderers to the schema-1 contract: the file the
+ * script writes is the fixture, and every way the file can be wrong has to
+ * end in one sentence rather than a throw. Red first, as ever.
+ */
+
+const QUALITY_FIXTURE = readFileSync(new URL('./fixtures/quality-1.json', import.meta.url), 'utf8');
+/* The fixture says it was generated on this date; "now" is set relative to
+   it so a test picks fresh or stale deliberately, never by the clock. */
+const FRESH = new Date('2026-09-09T12:00:00Z');
+const LATER = new Date('2026-09-30T12:00:00Z');
+
+const qualityVault = (text) => ({
+  exists: async (p) => text !== null && p === engine.QUALITY_PATH,
+  read: async (p) => { if (text === null || p !== engine.QUALITY_PATH) throw new Error('ENOENT ' + p); return text; },
+});
+
+test('RED: no quality file at all is one sentence naming the script, never an error', async () => {
+  const q = await engine.loadQuality(qualityVault(null), { now: FRESH });
+  assert.equal(q.status, 'missing');
+  assert.equal(q.health, 'unknown');
+  assert.deepEqual(q.metrics, []);
+  assert.ok(/check-quality\.py --write/.test(q.message), 'the sentence must name the command');
+  assert.ok(/ICOR for Life Terminal/.test(q.message) && /check my notes/.test(q.message), 'and both ways to run it');
+  const md = engine.renderQuality(q).join('\n');
+  assert.ok(md.includes('## Knowledge quality (no data yet)'));
+  assert.ok(md.includes(q.message), 'the report carries the same sentence, not a second wording');
+});
+
+test('RED: a quality file with another schema is refused, naming the schema seen and the one expected', async () => {
+  const q = await engine.loadQuality(qualityVault('{"schema": 2, "health": "ok", "metrics": []}'), { now: FRESH });
+  assert.equal(q.status, 'wrong-schema');
+  assert.equal(q.health, 'unknown');
+  assert.ok(/schema 2/.test(q.message) && /schema 1/.test(q.message), 'both numbers must be in the sentence');
+  assert.deepEqual(q.metrics, []);
+  /* and a file with no schema key at all is refused the same way */
+  const none = engine.parseQuality('{"health": "ok"}', { now: FRESH });
+  assert.equal(none.status, 'wrong-schema');
+  assert.ok(/no schema/.test(none.message));
+  assert.ok(engine.renderQuality(q).join('\n').includes('## Knowledge quality (unreadable)'));
+});
+
+test('RED: a quality file that is not JSON, or is JSON but not an object, is refused and never throws', async () => {
+  for (const text of ['{ not json', '[]', 'null', '"a string"', '']) {
+    const q = await engine.loadQuality(qualityVault(text), { now: FRESH });
+    assert.equal(q.status, 'invalid', 'refused: ' + JSON.stringify(text));
+    assert.equal(q.health, 'unknown');
+    assert.ok(q.message.length > 0);
+  }
+  /* an fs that throws on read is the same one sentence, not an exception */
+  const q = await engine.loadQuality({ exists: async () => true, read: async () => { throw new Error('EACCES'); } }, { now: FRESH });
+  assert.equal(q.status, 'invalid');
+  assert.ok(/could not be read/.test(q.message));
+});
+
+test('RED: numbers older than seven days carry a stale marker with their age; fresh ones carry none', () => {
+  const stale = engine.parseQuality(QUALITY_FIXTURE, { now: LATER });
+  assert.equal(stale.status, 'ok');
+  assert.equal(stale.stale, true);
+  assert.equal(stale.ageDays, 21);
+  const md = engine.renderQuality(stale).join('\n');
+  assert.ok(md.includes('**Stale:**') && md.includes('21 days old'));
+  const fresh = engine.parseQuality(QUALITY_FIXTURE, { now: FRESH });
+  assert.equal(fresh.stale, false);
+  assert.equal(fresh.ageDays, 0);
+  assert.ok(!engine.renderQuality(fresh).join('\n').includes('**Stale:**'));
+  /* a file whose `generated` cannot be read is stale too, and says why */
+  const undated = engine.parseQuality('{"schema": 1, "health": "ok", "metrics": []}', { now: FRESH });
+  assert.equal(undated.stale, true);
+  assert.equal(undated.ageDays, null);
+  assert.ok(engine.renderQuality(undated).join('\n').includes('no readable `generated` date'));
+});
+
+test('the quality section renders the fixture: metric table, counts, findings grouped, severity as text not colour', () => {
+  const q = engine.parseQuality(QUALITY_FIXTURE, { now: FRESH });
+  const md = engine.renderQuality(q).join('\n');
+  assert.ok(md.startsWith('## Knowledge quality (attention)'));
+  assert.ok(md.includes('Measured by `Scripts/check-quality.py` on 2026-09-09T08:30:00Z against scaffold 1.17.0'));
+  assert.ok(md.includes('| Metric | Value | Severity |'));
+  assert.ok(md.includes('| Notes without a link | 7 notes | (!) attention |'));
+  assert.ok(md.includes('| Enum violations | 0 fields | ok |'));
+  /* the scratchpad pair: one counts notes, the other counts days. Nothing
+     pinned that the first time and the fixture drifted, so it is pinned now. */
+  assert.ok(md.includes('| Unprocessed scratchpads | 3 notes | (!) attention |'), 'the count of scratchpads is in notes');
+  assert.ok(md.includes('| Oldest unprocessed scratchpad | 4 days | (!) attention |'), 'only the oldest is in days');
+  /* the script writes the unit in the plural; a value of one is singularised
+     here, because how a number reads is the plugin's job and not the script's */
+  assert.ok(md.includes('| Oldest unprocessed capture | 1 day | ok |'), 'one day, never "1 days"');
+  assert.equal(engine.metricValueText({ value: 1, unit: 'notes' }), '1 note');
+  assert.equal(engine.metricValueText({ value: 0, unit: 'notes' }), '0 notes');
+  assert.equal(engine.metricValueText({ value: 1, unit: 'progress' }), '1 progress', 'a unit ending in ss is left alone');
+  assert.equal(engine.metricValueText({ value: 1, unit: '' }), '1', 'no unit, no trailing space');
+  assert.ok(md.includes('Counted: Journal 412, Notes 96,'), 'the counts read in the contract order');
+  /* the metric table follows the contract's order, not the file's */
+  const order = engine.orderedMetrics(q).map((m) => m.id);
+  assert.deepEqual(order, engine.QUALITY_METRIC_IDS);
+  /* findings are grouped under their metric, each one path, message, action */
+  assert.ok(md.includes('### Missing required fields (2)'));
+  assert.ok(md.includes('Repair procedure: SOP-1014.'));
+  assert.ok(md.includes('- **`04 Inner World/My Life/Goals/run-a-marathon.md`** Required field `key_element` is missing.'));
+  assert.ok(md.includes('  - Do: Anchor the goal to a Key Element'));
+  /* the group heading counts the findings, and a metric with none is absent */
+  assert.ok(md.includes('### Notes without a link (2)'));
+  assert.ok(!md.includes('### Enum violations ('));
+  assert.ok(!md.includes('—') && !md.includes('–'), 'no em or en dashes in generated prose');
+});
+
+test('a metric with more than twenty findings shows twenty and a "+n more" line', () => {
+  const findings = [];
+  for (let i = 0; i < 26; i++) findings.push({ metric: 'orphans', severity: 'attention', path: 'note-' + i + '.md', message: 'Nothing links to this note.', action: 'Link it.' });
+  const q = engine.parseQuality(JSON.stringify({
+    schema: 1, generated: '2026-09-09T08:30:00Z', health: 'attention', counts: {},
+    metrics: [{ id: 'orphans', label: 'Orphans', value: 26, unit: 'notes', severity: 'attention', sop: 'SOP-1014' }],
+    findings,
+  }), { now: FRESH });
+  const md = engine.renderQuality(q).join('\n');
+  assert.equal(engine.QUALITY_FINDINGS_PER_METRIC, 20);
+  assert.ok(md.includes('### Orphans (26)'));
+  assert.ok(md.includes('`note-19.md`'), 'the twentieth is shown');
+  assert.ok(!md.includes('`note-20.md`'), 'the twenty-first is not');
+  assert.ok(md.includes('- +6 more in `' + engine.QUALITY_PATH + '`'));
+});
+
+test('a metric the script adds later is shown after the known ones; one it drops is simply absent', () => {
+  const q = engine.parseQuality(JSON.stringify({
+    schema: 1, generated: '2026-09-09T08:30:00Z', health: 'ok', counts: { journal: 3, bases: 9 },
+    metrics: [
+      { id: 'shopping_lists_unfiled', label: 'Unfiled shopping lists', value: 4, unit: 'notes', severity: 'ok' },
+      { id: 'orphans', label: 'Orphans', value: 1, unit: 'notes', severity: 'ok' },
+      { id: 'orphans', label: 'A duplicate id', value: 99, unit: 'notes', severity: 'broken' },
+      { label: 'no id at all', value: 1 },
+      { id: 'Not A Key', value: 1 },
+    ],
+    findings: [],
+  }), { now: FRESH });
+  assert.deepEqual(engine.orderedMetrics(q).map((m) => m.id), ['orphans', 'shopping_lists_unfiled']);
+  assert.equal(engine.orderedMetrics(q)[0].value, 1, 'the first of a duplicated id wins, the second is dropped');
+  /* an unknown count key is kept and shown after the known ones */
+  assert.equal(engine.countsText(q), 'Journal 3, bases 9');
+  /* a value that is not a number reads as unknown rather than NaN */
+  const odd = engine.parseQuality('{"schema":1,"health":"ok","metrics":[{"id":"orphans","label":"Orphans","value":"lots"}]}', { now: FRESH });
+  assert.equal(engine.metricValueText(odd.metrics[0]), 'unknown');
+});
+
+test('the report frontmatter carries quality_health, quality_generated and one key per metric id', async () => {
+  const r = await run(cleanFiles());
+  const q = engine.parseQuality(QUALITY_FIXTURE, { now: FRESH });
+  const md = engine.renderReport(r, { now: FRESH, quality: q });
+  const fm = md.slice(md.indexOf('---') + 3, md.indexOf('\n---', 3));
+  assert.ok(fm.includes('quality_health: attention'));
+  assert.ok(fm.includes('quality_generated: 2026-09-09T08:30:00Z'));
+  assert.ok(fm.includes('quality_stale: false'));
+  for (const id of engine.QUALITY_METRIC_IDS) assert.ok(new RegExp('^' + id + ': \\d+$', 'm').test(fm), 'frontmatter must carry ' + id);
+  assert.ok(fm.includes('notes_missing_link: 7') && fm.includes('duplicate_entities: 0'));
+  /* without data the two keys still exist and say so, and no metric key does */
+  const none = engine.renderReport(r, { now: FRESH, quality: engine.parseQuality(null, { now: FRESH }) });
+  const fm2 = none.slice(none.indexOf('---') + 3, none.indexOf('\n---', 3));
+  assert.ok(fm2.includes('quality_health: unknown') && fm2.includes('quality_generated: unknown'));
+  assert.ok(!/^orphans: /m.test(fm2));
+  /* the same is true when the caller passes no quality at all */
+  assert.ok(engine.renderReport(r, { now: FRESH }).includes('quality_health: unknown'));
+});
+
+test('the report puts the quality section between the severity groups and "For your AI", and the AI prompt names SOP-1014', async () => {
+  const files = cleanFiles(); files['06 AI Team/Agents/Kaspar/AGENT.md'] = contract('Kaspar', undefined);
+  const r = await run(files);
+  const md = engine.renderReport(r, { now: FRESH, quality: engine.parseQuality(QUALITY_FIXTURE, { now: FRESH }) });
+  const attention = md.indexOf('## Attention (');
+  const quality = md.indexOf('## Knowledge quality (');
+  const ai = md.indexOf('## For your AI');
+  assert.ok(attention > 0 && quality > attention && ai > quality, 'order: the groups, then quality, then the AI prompt');
+  assert.ok(/Then read the Knowledge quality section and run SOP-1014 for what it lists; propose repairs, apply only after I say yes\./.test(md));
+  assert.ok(!md.includes('—') && !md.includes('–'), 'no em or en dashes in generated prose');
+});
+
+/* ----------------------------------------------------- run history ---- */
+/*
+ * The plugin's own file under `.icor-for-life/<plugin-id>/`. It is state,
+ * not a setting, it is regenerable, and it is per device: every way it can
+ * be absent or wrong has to start fresh rather than throw (GL-1008).
+ */
+
+const result = (health, broken, attention, info) => ({ health, counts: { broken, attention, info }, installedVersion: '1.17.0', latestVersion: '1.17.0', findings: [] });
+
+test('RED: a missing, malformed or foreign-schema history starts fresh rather than throwing', async () => {
+  for (const text of [null, '{ not json', '[]', '{"schema": 2, "runs": []}', '{"schema": 1}', '{"schema":1,"runs":"nope"}']) {
+    const h = engine.parseHistory(text);
+    assert.deepEqual(h, { schema: 1, runs: [] }, 'starts fresh: ' + JSON.stringify(text));
+  }
+  /* a run without an `at` timestamp is dropped, the rest survive */
+  const mixed = engine.parseHistory('{"schema":1,"runs":[{"at":"2026-09-01T00:00:00Z","health":"ok"},{"health":"ok"},null,7]}');
+  assert.equal(mixed.runs.length, 1);
+  /* and through the fs, an absent file and a read that throws both start fresh */
+  assert.deepEqual(await engine.loadHistory({ exists: async () => false, read: async () => { throw new Error('never'); } }), { schema: 1, runs: [] });
+  assert.deepEqual(await engine.loadHistory({ exists: async () => true, read: async () => { throw new Error('EACCES'); } }), { schema: 1, runs: [] });
+  /* appendRun over rubbish still returns a well-formed file */
+  const after = engine.appendRun('not a history', engine.runRecord(result('ok', 0, 0, 0), null, new Date('2026-09-09T10:00:00Z')));
+  assert.equal(after.schema, 1);
+  assert.equal(after.runs.length, 1);
+});
+
+test('a run record carries both healths and one entry per metric that had a value', () => {
+  const q = engine.parseQuality(QUALITY_FIXTURE, { now: FRESH });
+  const rec = engine.runRecord(result('attention', 0, 3, 2), q, new Date('2026-09-09T10:00:00Z'));
+  assert.equal(rec.at, '2026-09-09T10:00:00.000Z');
+  assert.equal(rec.health, 'attention');
+  assert.equal(rec.broken, 0); assert.equal(rec.attention, 3); assert.equal(rec.info, 2);
+  assert.equal(rec.quality_health, 'attention');
+  assert.equal(rec.metrics.notes_missing_link, 7);
+  assert.equal(Object.keys(rec.metrics).length, engine.QUALITY_METRIC_IDS.length);
+  /* a run with no quality data on disk still records, with no metrics */
+  const bare = engine.runRecord(result('ok', 0, 0, 0), engine.parseQuality(null, { now: FRESH }), FRESH);
+  assert.equal(bare.quality_health, 'unknown');
+  assert.deepEqual(bare.metrics, {});
+});
+
+test('appending caps the history at ninety runs, keeping the newest and dropping from the front', () => {
+  let h = engine.parseHistory(null);
+  for (let i = 0; i < 95; i++) {
+    h = engine.appendRun(h, { at: '2026-01-01T00:00:0' + (i % 10) + 'Z', health: 'ok', broken: 0, attention: 0, info: 0, quality_health: 'ok', metrics: { orphans: i } });
+  }
+  assert.equal(engine.HISTORY_CAP, 90);
+  assert.equal(h.runs.length, 90);
+  assert.equal(h.runs[0].metrics.orphans, 5, 'the first five were dropped');
+  assert.equal(h.runs[89].metrics.orphans, 94, 'the newest run is last');
+  /* the series the dashboard draws: oldest first, at most the limit asked for */
+  const series = engine.metricSeries(h, 'orphans', 30);
+  assert.equal(series.length, 30);
+  assert.equal(series[0], 65);
+  assert.equal(series[29], 94);
+  /* a metric no run carried draws nothing, and a run missing it is skipped */
+  assert.deepEqual(engine.metricSeries(h, 'never_measured', 30), []);
+  assert.deepEqual(engine.metricSeries({ runs: [{ at: 'x', metrics: { orphans: 2 } }, { at: 'y' }, { at: 'z', metrics: { orphans: 'lots' } }] }, 'orphans', 30), [2]);
+});
+
+test('the sparkline path is drawn from the values alone: no values, one value, a flat series, a real one', () => {
+  assert.equal(engine.sparklinePath([], 60, 16), '', 'nothing to draw is the empty string, so the caller can skip the SVG');
+  assert.equal(engine.sparklinePath([4], 60, 16), 'M1.0,8.0 L59.0,8.0', 'one value draws flat at mid height');
+  assert.equal(engine.sparklinePath([3, 3, 3], 60, 16), 'M1.0,8.0 L30.0,8.0 L59.0,8.0', 'a series that never changes sits at mid height');
+  const d = engine.sparklinePath([0, 10], 60, 16);
+  assert.equal(d, 'M1.0,15.0 L59.0,1.0', 'the low value is at the bottom, the high one at the top');
+  /* every point stays inside the box, whatever the numbers are */
+  const pts = engine.sparklinePath([7, 0, 130, 2, 2], 60, 16).split(' ').map((s) => s.slice(1).split(',').map(Number));
+  for (const [x, y] of pts) { assert.ok(x >= 1 && x <= 59, 'x in the box: ' + x); assert.ok(y >= 1 && y <= 15, 'y in the box: ' + y); }
 });

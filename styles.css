@@ -46,3 +46,141 @@
   border-top: 1px solid var(--ink-hairline, var(--background-modifier-border));
   padding-top: 0.75em;
 }
+
+/* The dashboard view (0.4.0). Text first, colour beside it; the same
+ * layout on a phone: the tiles wrap, the table scrolls sideways inside its
+ * own box, nothing needs a hover. */
+.icor-scaffold-dashboard {
+  padding: 0.5em 1em 2em;
+  max-width: 60em;
+}
+.icor-scaffold-dashboard .icor-scaffold-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75em;
+  margin-bottom: 1em;
+}
+.icor-scaffold-dashboard .icor-scaffold-tile {
+  flex: 1 1 16em;
+  min-width: 0;
+  padding: 0.75em 1em;
+  border: 1px solid var(--ink-hairline, var(--background-modifier-border));
+  border-radius: var(--ink-radius, var(--radius-m, 6px));
+  background: var(--ink-paper-raised, var(--background-secondary));
+}
+.icor-scaffold-dashboard .icor-scaffold-tile-label {
+  color: var(--ink-paper-dim, var(--text-muted));
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25em;
+}
+.icor-scaffold-dashboard .icor-scaffold-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  text-transform: uppercase;
+  font-weight: 500;
+  margin-bottom: 0.25em;
+}
+.icor-scaffold-dashboard .icor-scaffold-meta {
+  color: var(--ink-paper-dim, var(--text-muted));
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+.icor-scaffold-stale {
+  font-size: 0.75em;
+  padding: 0.1em 0.5em;
+  border-radius: 1em;
+  color: var(--ink-marker, #ff5a2d);
+  border: 1px solid var(--ink-marker, #ff5a2d);
+  text-transform: uppercase;
+}
+.icor-scaffold-notice {
+  padding: 0.75em 1em;
+  border-left: 3px solid var(--ink-marker, #ff5a2d);
+  background: var(--ink-paper-raised, var(--background-secondary));
+}
+.icor-scaffold-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+  margin: 0 0 1em;
+}
+.icor-scaffold-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.2em;
+  padding: 0.2em 0.6em;
+  border-radius: 1em;
+  border: 1px solid var(--ink-hairline, var(--background-modifier-border));
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.85em;
+  color: var(--ink-paper-dim, var(--text-muted));
+}
+.icor-scaffold-chip-n {
+  color: var(--ink-ink, var(--text-normal));
+  font-weight: 600;
+}
+.icor-scaffold-tablewrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 0.5em;
+}
+.icor-scaffold-metrics {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.icor-scaffold-metrics th,
+.icor-scaffold-metrics td {
+  text-align: left;
+  padding: 0.4em 0.6em;
+  border-bottom: 1px solid var(--ink-hairline, var(--background-modifier-border));
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.icor-scaffold-metrics th {
+  color: var(--ink-paper-dim, var(--text-muted));
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.8em;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+.icor-scaffold-metrics td:first-child { white-space: normal; min-width: 10em; }
+.icor-scaffold-metrics .icor-scaffold-num {
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.icor-scaffold-metrics .icor-scaffold-sevcell {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+}
+.icor-scaffold-sev-ok        .icor-scaffold-sevcell { color: var(--ink-success-dot, #7d9a7f); }
+.icor-scaffold-sev-attention .icor-scaffold-sevcell { color: var(--ink-marker, #ff5a2d); }
+.icor-scaffold-sev-broken    .icor-scaffold-sevcell { color: var(--ink-danger, var(--text-error, #c0392b)); }
+.icor-scaffold-sev-ok        .icor-scaffold-trend { color: var(--ink-success-dot, #7d9a7f); }
+.icor-scaffold-sev-attention .icor-scaffold-trend { color: var(--ink-marker, #ff5a2d); }
+.icor-scaffold-sev-broken    .icor-scaffold-trend { color: var(--ink-danger, var(--text-error, #c0392b)); }
+.icor-scaffold-spark {
+  display: inline-block;
+  vertical-align: middle;
+  overflow: visible;
+}
+.icor-scaffold-trend-text {
+  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 0.85em;
+  color: var(--ink-paper-dim, var(--text-muted));
+}
+.icor-scaffold-dashboard .icor-scaffold-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5em;
+  margin-top: 1em;
+  border-top: 1px solid var(--ink-hairline, var(--background-modifier-border));
+  padding-top: 0.75em;
+}

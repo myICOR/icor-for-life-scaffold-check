@@ -43,14 +43,21 @@ gets fixed fast.
      `00000000-0000-0000-0000-000000000000` plus a name that starts with
      `Agent ` or `_`. The `.claude/agents/` shims are not checked for
      identity; they are files like any other.
-4. **Shows the result** as a dot in the status bar (green ok, orange
-   attention, red broken), a summary when you click it, and a report note.
+4. **Reads the knowledge quality numbers**, when the scaffold's own
+   `Scripts/check-quality.py --write` has written them. That script ships
+   with ICOR for Life Scaffold 1.18.0 or later. See "Knowledge quality"
+   below.
+5. **Shows the result** as a dot in the status bar (green ok, orange
+   attention, red broken), a summary when you click it, a report note, and
+   a dashboard.
 
 ## What it never does
 
 It never changes a scaffold file. The only things it writes are the report
-note (one per day, in a folder you choose), its own `data.json`, and, if you
-keep the GitHub token in an env file, that file's one `GITHUB_TOKEN` line.
+note (one per day, in a folder you choose), its own `data.json`, its run
+history under `.icor-for-life/icor-for-life-scaffold-check/` (regenerable,
+per device; see below), and, if you keep the GitHub token in an env file,
+that file's one `GITHUB_TOKEN` line.
 What it reads is listed in `SECURITY.md`; since 0.2.0 that includes every
 `06 AI Team/Agents/<Name>/AGENT.md` (your own agents' contracts too, for the
 `myicor_id` in their frontmatter) and, only when a shipped agent is found
@@ -74,6 +81,66 @@ relies on), then **Attention** (things to do), then **Info** (worth knowing).
 Inside each, findings are grouped by kind (guidelines, SOPs, agents, ...) so
 seventy missing files read as six guidelines and thirteen SOPs. Each finding
 names the file, says what was found, and says what to do.
+
+## Knowledge quality
+
+The checks above ask whether the scaffold's own files are intact. This asks
+whether your knowledge base is: notes that link to nothing, frontmatter
+fields nobody defined, orphans, dangling links, captures left sitting in the
+inbox. Thirteen metrics in all.
+
+**This plugin does not measure any of it.** The scaffold's own script does:
+
+```
+Scripts/check-quality.py --write
+```
+
+**The script ships with ICOR for Life Scaffold 1.18.0.** On an older
+scaffold it is not there yet, and this section stays empty until you update.
+
+Run it in the ICOR for Life Terminal, or just ask your AI to check your
+notes. It writes the numbers to `.icor-for-life/scripts/quality.json`, and
+the next check reads them. Until it has run once, the report and the
+dashboard carry one sentence saying so and how to fix it. Numbers older than
+seven days are shown with a stale marker.
+
+The split is deliberate. A script counting notes returns the same answer
+every time, in milliseconds; a model asked the same question returns the
+right shape most of the time, which is the worst reliability there is. The
+script measures, the plugin shows, and your AI is left with the part it is
+actually good at: deciding what to do about it.
+
+The report gains a **Knowledge quality** section: the health, a metric table,
+the counts, and the findings grouped under their metric, twenty per metric
+with a "+n more" line. Its frontmatter gains `quality_health`,
+`quality_generated`, `quality_stale` and one key per metric id.
+
+## The dashboard
+
+"Open the Scaffold dashboard" in the command palette, or the button in the
+result window. It shows both healths side by side, the entity counts, and the
+metric table with a trend line per metric drawn from your last thirty runs.
+Nothing on it needs a hover and severity is always a word beside the colour,
+so it reads the same on a phone as on a desktop. There is no chart library
+and no network call: the trend is one inline SVG path.
+
+## What the plugin writes outside the vault's notes
+
+`.icor-for-life/` is the ICOR for Life suite's machine layer: a hidden folder
+for data that a plugin or a script writes for another one to read. Obsidian
+does not show, index or search it, so nothing in it is ever a note. Each
+plugin owns one subfolder named after its id, the vault's scripts own
+`scripts/`, and the rule for everything in there is that something
+regenerates it. The full rule is `GL-1008-the-machine-layer` in the scaffold's
+Guidelines.
+
+This plugin reads `.icor-for-life/scripts/quality.json` (the script's, never
+written here) and writes exactly one file of its own,
+`.icor-for-life/icor-for-life-scaffold-check/history.json`: one record per
+completed run, capped at the last ninety, feeding the dashboard's trend
+lines. It is state, not a setting, which is why it is not in `data.json`.
+Delete it and you lose the trend and nothing else; it refills from the next
+check. Obsidian Sync does not carry hidden folders, so it is per device.
 
 ## Settings
 

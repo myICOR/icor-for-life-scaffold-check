@@ -1,7 +1,7 @@
 {
   "id": "icor-for-life-scaffold-check",
   "name": "ICOR for Life - Scaffold Check",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minAppVersion": "1.4.0",
   "description": "Is your vault up to date with the ICOR for Life Scaffold, and is what it has still intact? Compares the vault with the latest scaffold version, read-only, and writes a report you can fix by hand or hand to your AI. Part of the ICOR for Life suite.",
   "author": "myICOR",
