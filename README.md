@@ -39,10 +39,24 @@ says where it went.
 are enabled, and whether every saved view still points at a folder that is
 there.
 
+**Generated files.** Scaffold 1.23.0 and later write your AI-host files
+(skills, agent shims, hook configs) from your own vault rather than shipping
+them fixed, so yours are meant to differ from everyone else's. These are read
+as generated and never as something you edited: each one carries its own
+content hash, and the report only speaks up when that hash no longer matches,
+which means somebody edited a file the generator is about to overwrite. The
+fix is always to change the source and re-run the generator, never to edit
+the file and never to copy one in.
+
 **Knowledge quality.** How healthy the notes themselves are, not just the
 files: notes with no link, invented properties, orphans, dangling links,
 captures left sitting in the inbox. With a dashboard showing each number's
 trend over time.
+
+**Your AI hosts.** Which of Claude Code, Codex, Gemini CLI and Cursor this
+vault is actually wired to, what each one has installed, and what each one
+cannot do at all. Read from what the Scaffold's own `scaffold-init.py doctor`
+found; if you have never run it, the report says so and gives you the command.
 
 **A prompt for your AI.** The report ends with one, so you can hand the whole
 thing over and have it propose fixes before anything is applied.

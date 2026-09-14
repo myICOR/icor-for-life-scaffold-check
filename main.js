@@ -21,11 +21,24 @@
  *          renamed agent is intact, not missing, and a contract without an
  *          id, with a malformed or placeholder one, or sharing one with
  *          another contract, is named.
+ *        - the GENERATED HARNESS LAYER (scaffold 1.23.0): every file that
+ *          carries `scaffold-init.py`'s header is judged by the content
+ *          hash in that header, not against the scaffold's copy, because
+ *          the generator writes it from THIS vault's frontmatter. Intact
+ *          is nothing to do; a mismatch is a hand edit the next apply
+ *          will overwrite. The fix is always the generator, never a copy
+ *          and never a hand edit. `.agents/skills/` is per device: absent
+ *          is not a finding, a link with no skill behind it is.
  *   4. Reads the KNOWLEDGE QUALITY numbers the scaffold's own script writes
  *      to `.icor-for-life/scripts/quality.json` (0.4.0) and shows them in
  *      the report and on a dashboard view, with a trend per metric from
  *      this plugin's own run history. The script measures; this plugin
  *      only reads.
+ *      only reads. Reads the HARNESS the generator's `doctor --json`
+ *      writes to `.icor-for-life/scripts/harness.json` (0.5.0) the same
+ *      way: per host, what is detected, installed, trusted, tested and
+ *      unsupported. Absent means the generator has not been asked, which
+ *      is one sentence and not an error.
  *   5. Writes the report as a note the user can act on, or hand to their AI.
  *
  * What it never does: it never changes a scaffold file. The only things it
@@ -126,6 +139,192 @@ function readFrontmatter(text) {
 
 /* Templates carry the nil id on purpose: the placeholder plus a name that
    starts with "Agent " (the shipped `Agent 01`) or "_" (a member's own). */
+/* THE DAILY SCRATCHPAD SHAPE (GL-1004, amended 2026-09-10).
+ *
+ * Everything in `00 Daily Scratchpad/` sits in `YYYY/MM/` and carries one of
+ * three names: the daily note `YYYY-MM-DD.md`, the quick capture
+ * `YYYYMMDDHHmm.md` (optionally ` - Title` added after the fact, ` 2` on a
+ * same-minute collision), or a toolbar canvas `YYYY-MM-DD_canvas.canvas`.
+ * `Untitled` is the subject note before the member names it.
+ *
+ * Two things create strays without anyone deciding to. Obsidian's new-file
+ * location points at this room, so every click on a `[[wikilink]]` with no
+ * note behind it drops a title-named file here; and a vault that predates the
+ * nesting has its whole history loose at the room root. Both read as tidy in
+ * the file tree and are exactly what this check is for.
+ */
+const SCRATCHPAD_ROOT = '00 Daily Scratchpad';
+const SCRATCHPAD_SHAPES = [
+  /^\d{4}-\d{2}-\d{2}\.md$/,                       // daily note
+  /^\d{12}( \d+)?( - .+)?\.md$/,                    // quick capture, YYYYMMDDHHmm
+  /^\d{4}-\d{2}-\d{2}-\d{6}(-\d+)?\.md$/,         // legacy YYYY-MM-DD-HHmmss
+  /^\d{14}(-\d+)?\.md$/,                           // legacy YYYYMMDDHHMMSS
+  /^Untitled( \d+)?\.md$/,                          // subject note, not yet named
+  /^\d{4}-\d{2}-\d{2}_canvas([-_ ].*)?\.canvas$/,  // toolbar canvas
+];
+
+/* Returns null when the path is fine, or the reason it is not. A `.base` is a
+   saved view of the whole room and belongs at its root, so it is judged on
+   placement rather than on its name. */
+function scratchpadProblem(path) {
+  const rel = path.slice(SCRATCHPAD_ROOT.length + 1);
+  const parts = rel.split('/');
+  const name = parts[parts.length - 1];
+  if (name.startsWith('.') || name === 'README.md' || name === 'INDEX.md' || name === '_template.md') return null;
+  if (name.endsWith('.base')) {
+    return parts.length === 1 ? null : 'nesting-base';
+  }
+  if (parts.length !== 3 || !/^\d{4}$/.test(parts[0]) || !/^\d{2}$/.test(parts[1])) return 'nesting';
+  return SCRATCHPAD_SHAPES.some((re) => re.test(name)) ? null : 'name';
+}
+
+/* ------------------------------------------ the generated harness layer --- */
+/*
+ * Scaffold 1.23.0 stopped shipping its host bindings typed by hand and
+ * started generating them: `Scripts/scaffold-init.py apply` writes the
+ * skills, the Codex and Gemini agent shims, the hook configs and the host
+ * pointers from the vault's OWN frontmatter. Two vaults on the same
+ * scaffold version therefore hold different bytes in these files on
+ * purpose, and the three-way file check below would call every one of them
+ * "you edited this file" on any vault that has hired one agent.
+ *
+ * What makes a file generated here is the header it carries, never a path
+ * list: the generator can change which files it owns without this plugin
+ * learning about it, and a file that stops being generated stops carrying
+ * the marker. The header names the source and carries a twelve-character
+ * content hash over the rest of the file.
+ *
+ * Recomputing that hash is the same arithmetic `scaffold-init.py check`
+ * does, and it answers the only question worth asking about one of these
+ * files. Intact: the bytes differ from the scaffold's copy because your
+ * sources differ, and there is nothing to do. Mismatch: somebody edited it
+ * by hand, and the next apply overwrites the edit without saying so.
+ *
+ * JSON is its own case, because JSON cannot carry a comment. The header
+ * lives in the `description` VALUE and the hash covers the re-serialised
+ * `hooks` key alone. Dropping the line that carries the marker would leave
+ * the file unparseable and hash something that never existed.
+ */
+const GEN_MARK = 'GENERATED by scaffold-init.py';
+const GEN_HASH_RE = /content-hash:([0-9a-f]{12})/;
+const GEN_SOURCE_RE = /from `([^`]+)`/;
+const GEN_SCRIPT = '06 AI Team/AI Team Knowledge/Scripts/scaffold-init.py';
+const GEN_FIX = 'Run `python3 "' + GEN_SCRIPT + '" apply` from the vault root. A generated file is never fixed by hand and never copied in from the scaffold: change the source it names, then re-run the generator.';
+/* A link has no source to edit, so it gets its own line: telling someone to
+   change the source of a symlink is an instruction nobody can follow. */
+const LINK_FIX = 'Run `python3 "' + GEN_SCRIPT + '" apply` from the vault root. It writes these links from the skills in your vault; they are per device, so this is normal after a sync to a new machine.';
+
+/* The paths the generator owns, used ONLY to word the fix for a file that
+   is MISSING, because an absent file carries no header to read. A file
+   that is present is judged by its header and never by this list.
+
+   `.claude/agents/*.md` is deliberately not here. The generator classifies
+   those shims as held by hand, since they carry body lines the contract
+   does not, so "copy it in from the latest scaffold" is still the right
+   fix for them and treating them as generated would be a lie the member
+   would act on. */
+const HARNESS_PATHS = [
+  /^06 AI Team\/AI Team Knowledge\/Skills\/[^/]+\/SKILL\.md$/,
+  /^\.claude\/skills\/[^/]+\/SKILL\.md$/,
+  /^\.claude\/settings\.README\.md$/,
+  /^\.claude\/settings\.json$/,
+  /^\.codex\/agents\/[^/]+\.toml$/,
+  /^\.codex\/(hooks\.json|config\.toml)$/,
+  /^\.gemini\/agents\/[^/]+\.md$/,
+  /^GEMINI\.md$/,
+];
+function isHarnessPath(p) { return HARNESS_PATHS.some((re) => re.test(String(p))); }
+
+/* The one file the generator owns only PART of: it writes the `hooks` key
+   of `.claude/settings.json` and leaves every other key alone, so the file
+   carries no header and its bytes differing from the scaffold's copy is
+   the normal case rather than an edit to report. */
+function isPartlyGenerated(p) { return String(p) === '.claude/settings.json'; }
+
+/* GL-1008's membership test, as a guard. A file under `.icor-for-life/` is
+   there because something regenerates it, so it is state and never drift:
+   the per-session receipts and `session.json` that `checkpoint.py` writes,
+   the harness and quality numbers, and this plugin's own run history. None
+   of them belongs in a manifest; if one ever appears in one, that is an
+   upstream defect, and reporting it at a member's vault would be this
+   plugin repeating it. */
+const MACHINE_STATE = [
+  /^\.icor-for-life\/scripts\/receipts\//,
+  /^\.icor-for-life\/scripts\/session\.json$/,
+  /^\.icor-for-life\/scripts\/harness\.json$/,
+  /^\.icor-for-life\/scripts\/quality\.json$/,
+  /^\.icor-for-life\/icor-for-life-[^/]+\//,
+];
+function isMachineState(p) { return MACHINE_STATE.some((re) => re.test(String(p))); }
+
+/* The first line that is a generated header, or null.
+   A header is the marker AND a `content-hash:` on the SAME line, never the
+   marker alone. The generator's own source carries the marker as a string
+   constant, and so does its test suite; matching on the marker alone
+   reported both of them as generated files that had lost their hash, which
+   is a finding a member cannot act on and cannot silence. */
+function generatedHeaderLine(text) {
+  for (const line of String(text).split('\n')) if (line.includes(GEN_MARK) && line.includes('content-hash:')) return line;
+  return null;
+}
+
+/* { header, body } for a generated file, or { header: null } for one this
+   plugin must not touch. `body` is exactly the bytes the header's hash
+   covers. */
+function generatedDigestInput(path, text) {
+  /* Line endings are normalised before anything is hashed, because the
+     generator hashes LF text on every platform and cannot avoid it. Python's
+     `write_text` with the default newline translates every `\n` to
+     `os.linesep`, so on Windows these files sit on disk as CRLF; `read_text`
+     translates them back under universal newlines, so `scaffold-init.py
+     check` hashes LF and says intact. Reading the raw bytes here would hash
+     CRLF, call every generated file hand-edited, and print a fix that
+     rewrites the same bytes, so the finding could never clear. This is
+     exactly Python's read-side rule: CRLF and a lone CR both become LF. */
+  const s = String(text).replace(/\r\n?/g, '\n');
+  if (String(path).endsWith('.json')) {
+    let doc;
+    try { doc = JSON.parse(s); } catch { return { header: null }; }
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return { header: null };
+    const desc = typeof doc.description === 'string' ? doc.description : '';
+    if (!desc.includes(GEN_MARK) || !desc.includes('content-hash:')) return { header: null };
+    return { header: desc, body: JSON.stringify({ hooks: 'hooks' in doc ? doc.hooks : {} }, null, 2) };
+  }
+  const line = generatedHeaderLine(s);
+  if (line === null) return { header: null };
+  /* The generator strips every line carrying the marker, so this strips on
+     the same rule or the two hash different text and every file reports as
+     hand-edited. */
+  return { header: line, body: s.split('\n').filter((l) => !l.includes(GEN_MARK)).join('\n') };
+}
+
+/*
+ * generatedState(path, text, hash) -> { state, source } or null when the
+ * file is not generated.
+ *
+ * state: 'intact' (still the bytes the generator would write), 'edited'
+ * (the header is there and the body no longer matches it), 'unhashed' (a
+ * header from a generator older than the content hash), 'unreadable' (the
+ * hash could not be taken here, so nothing is claimed either way).
+ * `hash` is the engine's sha256-over-bytes; the generator keeps its first
+ * twelve hex characters.
+ */
+async function generatedState(path, text, hash) {
+  const d = generatedDigestInput(path, text);
+  if (d.header === null) return null;
+  const source = (GEN_SOURCE_RE.exec(d.header) || [])[1] || null;
+  const m = GEN_HASH_RE.exec(d.header);
+  if (!m) return { state: 'unhashed', source };
+  let have = null;
+  try { have = await hash(new TextEncoder().encode(d.body)); } catch { have = null; }
+  if (have === null) return { state: 'unreadable', source };
+  return { state: String(have).slice(0, 12) === m[1] ? 'intact' : 'edited', source };
+}
+
+/* Where the host link layer and the canonical skills live. */
+const HOST_LINKS_DIR = '.agents/skills';
+const SKILLS_DIR = '06 AI Team/AI Team Knowledge/Skills';
+
 function isTemplateName(name) {
   return /^(Agent |_)/.test(String(name || ''));
 }
@@ -287,16 +486,50 @@ async function runChecks({ fs, hash, remote, local, installedVersion, configDir 
   const localHashes = new Map((local && local.files || []).map((f) => [f.path, f.sha256]));
   for (const f of remote.files || []) {
     const fk = { fileKind: f.kind || 'file' };
+    if (isMachineState(f.path)) continue; /* state, never drift (GL-1008) */
     const exists = await fs.exists(f.path);
     if (!exists) {
       if (f.example) continue; /* example notes are meant to be deleted */
       if (foundElsewhere.has(f.path)) continue; /* the agent lives under the member's own name */
+      if (isHarnessPath(f.path)) {
+        add('generated', 'attention', f.path, 'Generated harness file is missing, so the host that reads it reads nothing.', GEN_FIX, fk);
+        continue;
+      }
       add('file', 'attention', f.path, 'Canonical ' + f.kind + ' is missing.', 'Copy it in from the latest scaffold.', fk);
       continue;
     }
     let have;
     try { have = await hash(await fs.readBinary(f.path)); } catch (e) { have = null; }
     if (have === f.sha256) continue;
+
+    /* Generated from this vault's own frontmatter, so bytes that differ
+       from the scaffold's copy are the normal case. Only the hash in the
+       file's own header can say whether a hand touched it. */
+    let text = null;
+    try { text = await fs.read(f.path); } catch { text = null; }
+    const gen = text === null ? null : await generatedState(f.path, text, hash);
+    if (gen) {
+      const from = gen.source ? '`' + gen.source + '`' : 'its source';
+      if (gen.state === 'intact') {
+        add('generated', 'info', f.path, 'Generated from ' + from + ', and its body still matches the hash in its own header, so it differs from the scaffold only because your source does.',
+          'Nothing to do. This file is rewritten from your vault by `scaffold-init.py apply`; it is not a scaffold file you keep in step.',
+          Object.assign({ collapse: 'generated-intact' }, fk));
+      } else if (gen.state === 'edited') {
+        add('generated', 'attention', f.path, 'Generated from ' + from + ', and its body no longer matches the hash in its own header, so it was edited by hand.',
+          'Move what you added into ' + from + '. ' + GEN_FIX + ' The next apply overwrites this file and the edit goes with it.', fk);
+      } else if (gen.state === 'unhashed') {
+        add('generated', 'attention', f.path, 'Carries the generated header but no content hash, so it was written by a generator older than this check and cannot be verified.', GEN_FIX, fk);
+      } else {
+        add('generated', 'info', f.path, 'Generated from ' + from + '. Not checked: its hash could not be taken on this platform.',
+          'Nothing to do here. Run `python3 "' + GEN_SCRIPT + '" check` in the ICOR for Life Terminal for the answer.', fk);
+      }
+      continue;
+    }
+    if (isPartlyGenerated(f.path)) {
+      add('generated', 'info', f.path, 'The generator owns the `hooks` key of this file and leaves every other key to you, so it differing from the scaffold\'s copy is expected.',
+        'Run `python3 "' + GEN_SCRIPT + '" check` to see whether the generated part is current. Never copy this file in from the scaffold: that would drop your own settings.', fk);
+      continue;
+    }
     const installedHash = localHashes.get(f.path);
     if (installedHash && have === installedHash) {
       add('file', 'attention', f.path, 'Changed upstream since you installed; your copy is the version you started with.',
@@ -317,6 +550,7 @@ async function runChecks({ fs, hash, remote, local, installedVersion, configDir 
      that shares the old name but not the old bytes is the user's own, and
      is reported as a name collision, never as a leftover. */
   for (const r of removalsSince(remote, installed)) {
+    if (isMachineState(r.path)) continue; /* state, never a leftover (GL-1008) */
     if (!(await fs.exists(r.path))) continue;
     let same = true;
     if (r.sha256) {
@@ -368,6 +602,73 @@ async function runChecks({ fs, hash, remote, local, installedVersion, configDir 
   if (Array.isArray(remote.snippets) && remote.snippets.length === 0 && (appearance.enabledCssSnippets || []).length) {
     add('snippet', 'info', cfg + '/appearance.json', 'The latest scaffold enables no CSS snippets; this vault enables ' + appearance.enabledCssSnippets.length + '.',
       'If they are the scaffold\'s old snippets, disable them; their rules live in the theme now.');
+  }
+
+  /* 9. the Daily Scratchpad keeps its shape: YYYY/MM/ nesting and one of the
+     three legal names (GL-1004). Reported once per file, because the fix is
+     per file and a single "the room is untidy" line tells you nothing about
+     which one to move. */
+  for (const path of await fs.listScratchpads()) {
+    const problem = scratchpadProblem(path);
+    if (!problem) continue;
+    if (problem === 'nesting-base') {
+      add('scratchpad', 'attention', path, 'A saved view belongs at the root of `' + SCRATCHPAD_ROOT + '`, not inside a dated folder.',
+        'Move it to `' + SCRATCHPAD_ROOT + '/`. It is a view of the whole room, not of one month.');
+    } else if (problem === 'nesting') {
+      add('scratchpad', 'attention', path, 'Sits outside `YYYY/MM/`. The Daily Scratchpad is date-nested like the Journal (GL-1004).',
+        'Move it into `' + SCRATCHPAD_ROOT + '/<year>/<month>/` for its own date. Check that Settings, Daily notes uses `YYYY/MM/YYYY-MM-DD` and that the Scratchpad plugin uses `YYYY/MM`, or the next note lands loose again.');
+    } else {
+      add('scratchpad', 'attention', path, 'Is named for its subject rather than its date, so it is a note that has ended up in the capture room.',
+        'A note with a subject belongs in `04 Inner World/Notes/`; a person, company or life entity belongs in `04 Inner World/`. Obsidian creates these by clicking a `[[wikilink]]` that has no note behind it, so also check Settings, Files and links, Default location for new notes.');
+    }
+  }
+
+  /* 10. `.agents/skills/`: the links Codex, Gemini CLI and Cursor read.
+     `scaffold-init.py apply` writes them, git never tracks them and the
+     download never ships them, so the folder is per device by design.
+     ABSENT is therefore not a finding: it means this device has not run
+     the generator, which is a choice and not damage. A link that does not
+     resolve IS a finding, because the host follows it, finds nothing, and
+     says nothing about it.
+
+     The test is whether `<link>/SKILL.md` is there, not anything about
+     symlinks. The vault adapter has no `lstat` on any platform, so a
+     dangling link is invisible as a link; and what the host actually needs
+     is the skill behind the link rather than the link. Where the adapter
+     cannot list the folder at all the check says so and claims nothing:
+     a platform that cannot look is not a vault that is broken. */
+  const skillNames = typeof fs.listSkillNames === 'function' ? await fs.listSkillNames() : [];
+  const links = typeof fs.hostSkillLinks === 'function'
+    ? await fs.hostSkillLinks(skillNames)
+    : { supported: false, present: false, entries: [] };
+  if (!links.supported) {
+    add('harness-link', 'info', HOST_LINKS_DIR,
+      'Not checked on this device: Codex, Gemini CLI and Cursor do not run here.',
+      'Nothing to do. These links exist for the hosts that read them, and none of them runs on a phone or tablet.');
+  } else if (links.present) {
+    /* The listing failing is itself the finding, not a reason to stay quiet.
+       On desktop the adapter stats every entry it lists and a link with no
+       target ends the whole call, so the one input this check exists to
+       catch is the input that makes the listing fail. Reporting that as
+       "could not look" would be a guard whose green is reachable without
+       the thing being true. */
+    if (links.listable === false) {
+      add('harness-link', 'attention', HOST_LINKS_DIR,
+        'The folder is here and could not be listed. On a desktop vault that means at least one link in it points at nothing: listing stats every entry, and an entry with no target ends the listing.',
+        LINK_FIX);
+    }
+    for (const e of links.entries || []) {
+      if (e.resolves) continue;
+      if (e.known) {
+        add('harness-link', 'attention', HOST_LINKS_DIR + '/' + e.name,
+          'Skill `' + e.name + '` cannot be reached through `' + HOST_LINKS_DIR + '`, so only Claude Code can see it. Either there is no link, or the link points at nothing.',
+          LINK_FIX);
+      } else {
+        add('harness-link', 'attention', HOST_LINKS_DIR + '/' + e.name,
+          'Points into `' + SKILLS_DIR + '` at something that is not there, so Codex, Gemini CLI and Cursor read nothing for it and report no error.',
+          LINK_FIX);
+      }
+    }
   }
 
   const counts = { broken: 0, attention: 0, info: 0 };
@@ -570,12 +871,232 @@ function renderQuality(q) {
   return L;
 }
 
+/* ------------------------------------------------------ the harness ---- */
+/*
+ * `scaffold-init.py doctor --json` writes what it found about each AI host
+ * to `.icor-for-life/scripts/harness.json`, schema 1 (GL-1008: the machine
+ * layer). Per host: what was detected, what is installed, whether the host
+ * trusts this folder, whether the guards have been watched go red, and
+ * what that host cannot do at all. This plugin never inspects a host; it
+ * reads that one file and shows it.
+ *
+ * A missing file means "the generator has not been asked yet" and is one
+ * sentence with the command in it, never an error. Another schema, or
+ * anything that is not JSON, is refused with one sentence and never
+ * thrown.
+ */
+const HARNESS_PATH = META_DIR + '/scripts/harness.json';
+const HARNESS_SCHEMA = 1;
+const HARNESS_HOST_ORDER = ['claude-code', 'codex', 'gemini', 'cursor'];
+const HARNESS_HOST_LABELS = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor' };
+const HARNESS_TRUSTED = ['yes', 'no', 'unknown'];
+const HARNESS_TESTED = ['ok', 'red', 'absent', 'error', 'skipped', 'unsupported'];
+/* The words a person reads, in place of the file's machine values. */
+const HARNESS_TESTED_TEXT = { ok: 'green', red: 'RED', absent: 'no suite here', error: 'could not run', skipped: 'not run', unsupported: 'not applicable' };
+/* The trust word in the table is short on purpose; the reason is a line of
+   its own under it, because a sentence a member has to act on does not belong
+   in a cell that scrolls sideways. */
+const HARNESS_TRUSTED_TEXT = { yes: 'yes', no: 'NOT TRUSTED', unknown: 'unknown' };
+const HARNESS_TEXT = { ok: 'Harness ok', attention: 'Harness: attention', unknown: 'Harness: no data' };
+const NO_HARNESS_DATA = 'No harness data exists yet: run `python3 "' + GEN_SCRIPT + '" doctor --json` (ICOR for Life Scaffold 1.23.0 or later) in the ICOR for Life Terminal, and the next Scaffold Check will show which AI hosts this vault is wired to.';
+
+function noHarness(status, message) {
+  return { status, message, health: 'unknown', generated: null, scaffoldVersion: null, skills: null, files: null, tests: null, problems: [], notes: [], hosts: [] };
+}
+
+const asList = (v) => (Array.isArray(v) ? v.map(asText).map((s) => s.trim()).filter(Boolean) : []);
+
+/*
+ * parseHarness(text) -> { status, message, health, generated,
+ * scaffoldVersion, skills, files, tests, problems, notes, hosts }
+ *
+ * status: 'ok', 'missing' (text was null), 'invalid', 'wrong-schema'.
+ * health is 'attention' when the generator reported a problem or the red
+ * tests came back RED, and 'ok' otherwise: those are the two states a
+ * person can act on. A host entry without a known id is dropped, because
+ * a row whose first column is a guess is worse than no row.
+ * Never throws.
+ */
+function parseHarness(text) {
+  if (text == null) return noHarness('missing', NO_HARNESS_DATA);
+  const badJson = '`' + HARNESS_PATH + '` is not valid JSON, so the harness is not shown; run `scaffold-init.py doctor --json` again to rewrite it.';
+  let raw;
+  try { raw = JSON.parse(String(text)); } catch { return noHarness('invalid', badJson); }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return noHarness('invalid', badJson);
+  if (raw.schema !== HARNESS_SCHEMA) {
+    const seen = raw.schema === undefined ? 'no schema' : 'schema ' + JSON.stringify(raw.schema);
+    return noHarness('wrong-schema', '`' + HARNESS_PATH + '` carries ' + seen + ' and this plugin reads schema ' + HARNESS_SCHEMA + ', so the harness is not shown; update the plugin or the scaffold so the two agree.');
+  }
+  const num = (o, k) => (o && typeof o === 'object' ? asNumber(o[k]) : null);
+  const skills = raw.skills && typeof raw.skills === 'object'
+    ? { count: num(raw.skills, 'count'), tokens: num(raw.skills, 'tokens'), budget: num(raw.skills, 'budget') } : null;
+  const files = raw.files && typeof raw.files === 'object'
+    ? { generated: num(raw.files, 'generated'), handKept: num(raw.files, 'hand_kept'), orphans: num(raw.files, 'orphans') } : null;
+  const tests = raw.tests && typeof raw.tests === 'object'
+    ? { status: HARNESS_TESTED.includes(raw.tests.status) ? raw.tests.status : 'error', summary: asText(raw.tests.summary).trim(), skips: asList(raw.tests.skips) } : null;
+  const hosts = [];
+  const seen = new Set();
+  for (const h of Array.isArray(raw.hosts) ? raw.hosts : []) {
+    if (!h || typeof h !== 'object' || typeof h.id !== 'string') continue;
+    const id = h.id.trim();
+    if (!HARNESS_HOST_LABELS[id] || seen.has(id)) continue;
+    seen.add(id);
+    hosts.push({
+      id,
+      label: HARNESS_HOST_LABELS[id],
+      detected: asList(h.detected),
+      installed: asText(h.installed).trim(),
+      trusted: HARNESS_TRUSTED.includes(h.trusted) ? h.trusted : 'unknown',
+      trustedNote: asText(h.trusted_note).trim(),
+      tested: HARNESS_TESTED.includes(h.tested) ? h.tested : 'error',
+      unsupported: asList(h.unsupported),
+      /* Published only by a host that has a sandbox, so `sandbox` being
+         absent is the normal case and not a false. */
+      sandbox: h.sandbox === true,
+      sandboxNote: asText(h.sandbox_note).trim(),
+    });
+  }
+  hosts.sort((a, b) => HARNESS_HOST_ORDER.indexOf(a.id) - HARNESS_HOST_ORDER.indexOf(b.id));
+  const problems = asList(raw.problems);
+  /* A host that is not trusted lifts the health, because "Harness ok" printed
+     above a line reading "guards off in codex exec until trusted" is a green
+     reachable while the thing is false, which is the exact failure this whole
+     block exists to stop. `unknown` does not lift it: not being able to read a
+     file is not the same as knowing something is wrong. */
+  const untrusted = hosts.some((x) => x.trusted === 'no');
+  const health = problems.length || untrusted || (tests && tests.status === 'red') ? 'attention' : 'ok';
+  return {
+    status: 'ok', message: '', health,
+    generated: asText(raw.generated).trim() || null,
+    scaffoldVersion: asText(raw.scaffold_version).trim() || null,
+    skills, files, tests, problems, notes: asList(raw.notes), hosts,
+  };
+}
+
+/* The harness file through the engine's fs interface: absent is 'missing',
+   unreadable is 'invalid'. Never throws. */
+async function loadHarness(fs) {
+  let present = false;
+  try { present = await fs.exists(HARNESS_PATH); } catch { present = false; }
+  if (!present) return parseHarness(null);
+  let text;
+  try { text = await fs.read(HARNESS_PATH); } catch { return noHarness('invalid', '`' + HARNESS_PATH + '` exists but could not be read, so the harness is not shown.'); }
+  return parseHarness(text);
+}
+
+/* The frontmatter keys the report carries for the harness, so a Base can
+   read them without opening the file. */
+function harnessFrontmatter(h) {
+  const L = [];
+  if (!h || h.status !== 'ok') { L.push('harness_health: unknown'); L.push('harness_generated: unknown'); return L; }
+  L.push('harness_health: ' + h.health);
+  L.push('harness_generated: ' + (h.generated || 'unknown'));
+  L.push('harness_hosts_detected: ' + h.hosts.filter((x) => x.detected.length).length);
+  if (h.skills && h.skills.count !== null) L.push('harness_skills: ' + h.skills.count);
+  if (h.tests) L.push('harness_tests: ' + h.tests.status);
+  const untrusted = h.hosts.filter((x) => x.trusted === 'no').map((x) => x.id);
+  if (untrusted.length) L.push('harness_untrusted_hosts: ' + untrusted.join(', '));
+  return L;
+}
+
+/* The "Harness" section of the report as lines: one row per host, then the
+   counts and whatever the generator could not settle. Without data the
+   section is the one sentence that says how to get some. */
+function renderHarness(h) {
+  const L = [];
+  if (!h || h.status !== 'ok') {
+    L.push('## Harness (' + (h && h.status !== 'missing' ? 'unreadable' : 'no data yet') + ')');
+    L.push('');
+    L.push(h ? h.message : NO_HARNESS_DATA);
+    L.push('');
+    return L;
+  }
+  L.push('## Harness (' + h.health + ')');
+  L.push('');
+  L.push('Which AI hosts this vault is wired to, read from `' + HARNESS_PATH + '` as `scaffold-init.py doctor --json` wrote it '
+    + (h.generated ? 'on ' + h.generated : 'at an unknown time')
+    + (h.scaffoldVersion ? ' against scaffold ' + h.scaffoldVersion : '') + '. This check only reads it; the generator looks.');
+  L.push('');
+  if (h.hosts.length) {
+    L.push('| Host | Detected | Installed | Trusted | Guards tested | Unsupported |');
+    L.push('|---|---|---|---|---|---|');
+    for (const x of h.hosts) {
+      L.push('| ' + x.label
+        + ' | ' + (x.detected.length ? x.detected.join(', ') : 'no')
+        + ' | ' + (x.installed || 'nothing')
+        + ' | ' + (HARNESS_TRUSTED_TEXT[x.trusted] || x.trusted)
+        + ' | ' + (HARNESS_TESTED_TEXT[x.tested] || x.tested)
+        + ' | ' + (x.unsupported.length ? x.unsupported.join('; ') : 'nothing') + ' |');
+    }
+    L.push('');
+  }
+  /* One line per thing a member can act on, under the table rather than in
+     it. A host that is not trusted is the one state that costs something and
+     says nothing: Codex asks about hooks only in an interactive session, so
+     `codex exec` runs none of them and prints nothing about it, and a
+     terminal with every guard off looks exactly like one with them on. */
+  for (const x of h.hosts) {
+    if (x.trusted === 'no' && x.trustedNote) L.push('- **' + x.label + ', trust:** ' + x.trustedNote);
+    else if (x.trusted === 'unknown' && x.trustedNote && x.id === 'codex') L.push('- **' + x.label + ', trust:** ' + x.trustedNote);
+  }
+  for (const x of h.hosts) {
+    if (x.sandbox && x.sandboxNote) L.push('- **' + x.label + ', sandbox:** ' + x.sandboxNote);
+  }
+  if (h.hosts.some((x) => (x.trusted !== 'yes' && x.trustedNote && (x.trusted === 'no' || x.id === 'codex')) || (x.sandbox && x.sandboxNote))) L.push('');
+
+  const bits = [];
+  if (h.skills && h.skills.count !== null) {
+    bits.push(h.skills.count + ' skill' + (h.skills.count === 1 ? '' : 's')
+      + (h.skills.tokens !== null && h.skills.budget !== null ? ', about ' + h.skills.tokens + ' startup tokens of a ' + h.skills.budget + ' budget' : ''));
+  }
+  if (h.files) {
+    if (h.files.generated !== null) bits.push(h.files.generated + ' generated file' + (h.files.generated === 1 ? '' : 's'));
+    if (h.files.handKept !== null) bits.push(h.files.handKept + ' shim' + (h.files.handKept === 1 ? '' : 's') + ' held by hand');
+    if (h.files.orphans !== null) bits.push(h.files.orphans + ' orphan' + (h.files.orphans === 1 ? '' : 's'));
+  }
+  if (bits.length) { L.push(bits.join(', ') + '.'); L.push(''); }
+  if (h.tests) {
+    /* The summary often already says what the status says, and printing
+       both reads as a stutter ("not run. not run"). */
+    const word = HARNESS_TESTED_TEXT[h.tests.status] || h.tests.status;
+    const sum = h.tests.summary;
+    L.push('Red tests: ' + (sum && !sum.toLowerCase().includes(word.toLowerCase()) ? word + '. ' + sum : (sum || word + '.')));
+    for (const skip of h.tests.skips) L.push('- ' + skip);
+    L.push('');
+    /* Only a green needs its limits stated. Saying what a green does not
+       prove under a suite that never ran would be a caveat on nothing. */
+    if (h.tests.status === 'ok') {
+      L.push('What a green here does not prove: that any host reads any of it, that a hook fires, or that a skill gets selected. It proves the guards refuse what they must refuse.');
+      L.push('');
+    }
+  }
+  for (const pr of h.problems) { L.push('- **Problem:** ' + pr); }
+  if (h.problems.length) L.push('');
+  for (const n of h.notes) { L.push('- Note: ' + n); }
+  if (h.notes.length) L.push('');
+  return L;
+}
+
+/* The heading a group of findings gets, when the kind's own name is not
+   what a person would call it. A kind not in here keeps its own name, which
+   is what every kind did before these three arrived. */
+const KIND_LABELS = { generated: 'Generated harness layer', 'harness-link': 'Host skill links', scratchpad: 'Daily Scratchpad' };
+
+/* Findings that say the same "nothing to do" are counted, not listed. On a
+   vault with eight agents that is twenty-two lines each saying nothing is
+   wrong, and they bury the one line that says something is. Only findings
+   carrying a `collapse` key do this, and only when there is more than one:
+   a summary of a single item is longer than the item. */
+const COLLAPSE_SUMMARY = {
+  'generated-intact': (n) => '**' + n + ' generated files, all current.** Each is written from your own vault by `scaffold-init.py apply` and still matches the hash in its own header, so each differs from the scaffold only because your source does. Nothing to do.',
+};
+
 /* The report note. Frontmatter carries the numbers so a Base or a script can
    read it; the body is for the person, grouped by what to do. opts.quality
    is a parseQuality() result; absent, the quality section says there is no
    data yet. */
 function renderReport(result, opts) {
-  const o = Object.assign({ now: new Date(), manifestUrl: '', vaultName: '', quality: null }, opts || {});
+  const o = Object.assign({ now: new Date(), manifestUrl: '', vaultName: '', quality: null, harness: null }, opts || {});
   const stamp = o.now.toISOString().slice(0, 10);
   const L = [];
   L.push('---');
@@ -588,6 +1109,7 @@ function renderReport(result, opts) {
   L.push('attention: ' + result.counts.attention);
   L.push('info: ' + result.counts.info);
   for (const line of qualityFrontmatter(o.quality)) L.push(line);
+  for (const line of harnessFrontmatter(o.harness)) L.push(line);
   L.push('---');
   L.push('');
   L.push('# Scaffold Check, ' + stamp);
@@ -628,23 +1150,30 @@ function renderReport(result, opts) {
     for (const f of rows) if (!kinds.includes(groupOf(f))) kinds.push(groupOf(f));
     for (const kind of kinds) {
       const sub = rows.filter((f) => groupOf(f) === kind);
-      if (kinds.length > 1) { L.push('### ' + kind + ' (' + sub.length + ')'); L.push(''); }
+      if (kinds.length > 1) { L.push('### ' + (KIND_LABELS[kind] || kind) + ' (' + sub.length + ')'); L.push(''); }
+      const counted = new Map();
       for (const f of sub) {
+        if (f.collapse && COLLAPSE_SUMMARY[f.collapse] && sub.filter((x) => x.collapse === f.collapse).length > 1) {
+          counted.set(f.collapse, (counted.get(f.collapse) || 0) + 1);
+          continue;
+        }
         L.push('- **`' + f.path + '`** ' + f.message);
         L.push('  - Do: ' + f.action);
       }
+      for (const [key, n] of counted) L.push('- ' + COLLAPSE_SUMMARY[key](n));
       L.push('');
     }
   }
 
   for (const line of renderQuality(o.quality)) L.push(line);
+  for (const line of renderHarness(o.harness)) L.push(line);
 
   L.push('## For your AI');
   L.push('');
   L.push('Paste this into your AI session to have the fixes done for you. Everything above is the input; nothing here changes a file on its own.');
   L.push('');
   L.push('```');
-  L.push('Read the Scaffold Check report at the path of this note. Fix every Broken item, then every Attention item, in order. Rules: never overwrite a file the report says I edited; for a leftover, delete it only after reading the changelog line the report cites; for a missing canonical file, copy it from the latest ICOR for Life Scaffold; never change or reuse a `myicor_id`, an agent keeps its id for life. Show me each change before you make it. Then read the Knowledge quality section and run SOP-1014 for what it lists; propose repairs, apply only after I say yes.');
+  L.push('Read the Scaffold Check report at the path of this note. Fix every Broken item, then every Attention item, in order. Rules: never overwrite a file the report says I edited; for a leftover, delete it only after reading the changelog line the report cites; for a missing canonical file, copy it from the latest ICOR for Life Scaffold; never change or reuse a `myicor_id`, an agent keeps its id for life; never hand-edit anything under Generated harness layer, change the source the report names and run `python3 "' + GEN_SCRIPT + '" apply` instead. Show me each change before you make it. Then read the Knowledge quality section and run SOP-1014 for what it lists; propose repairs, apply only after I say yes.');
   L.push('```');
   L.push('');
   if (o.manifestUrl) {
@@ -742,7 +1271,7 @@ function sparklinePath(values, width, height) {
   }).join(' ');
 }
 
-const engine = { parseVersion, compareVersions, baseFolders, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS };
+const engine = { parseVersion, compareVersions, baseFolders, scratchpadProblem, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, generatedState, generatedHeaderLine, isHarnessPath, isPartlyGenerated, isMachineState, parseHarness, loadHarness, harnessFrontmatter, renderHarness, KIND_LABELS, COLLAPSE_SUMMARY, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS, GEN_MARK, GEN_SCRIPT, HARNESS_PATH, HARNESS_SCHEMA, HARNESS_TEXT, HARNESS_TESTED_TEXT, HARNESS_TRUSTED_TEXT, HARNESS_HOST_LABELS, HOST_LINKS_DIR, SKILLS_DIR, NO_HARNESS_DATA };
 
 /* ============================================= where the token lives ===== */
 /*
@@ -919,7 +1448,7 @@ const secrets = { SECRET_ID, ENV_KEY, DEFAULT_ENV_FILE, BACKEND_STORE, BACKEND_E
 /* ======================================================= the plugin ===== */
 
 if (obsidian) {
-  const { Plugin, PluginSettingTab, Setting, Notice, Modal, ItemView, requestUrl, normalizePath } = obsidian;
+  const { Plugin, PluginSettingTab, Setting, Notice, Modal, ItemView, Platform, requestUrl, normalizePath } = obsidian;
 
   const VIEW_TYPE = 'icor-scaffold-dashboard';
 
@@ -977,6 +1506,7 @@ if (obsidian) {
         return { files: (r && r.files) || [], folders: (r && r.folders) || [] };
       },
       listBases: async () => app.vault.getFiles().filter((f) => f.extension === 'base' && !f.path.startsWith(app.vault.configDir + '/')).map((f) => f.path),
+      listScratchpads: async () => app.vault.getFiles().filter((f) => f.path.startsWith(SCRATCHPAD_ROOT + '/')).map((f) => f.path),
       listAgentContracts: async () => {
         const out = [];
         for (const folder of (await self.list(AGENTS_DIR)).folders) {
@@ -986,6 +1516,69 @@ if (obsidian) {
         return out;
       },
       listShims: async () => (await self.list('.claude/agents')).files.filter((p) => p.endsWith('.md')).map((p) => normalizePath(p)),
+      /* The canonical skills, by folder name. */
+      listSkillNames: async () => (await self.list(SKILLS_DIR)).folders.map((p) => p.split('/').filter(Boolean).pop()).filter(Boolean),
+      /*
+       * The host link layer. Three answers, and the third one matters:
+       *
+       *   supported:false  the adapter could not list the folder here, so
+       *                    nothing is claimed. There is no `lstat` in the
+       *                    adapter on any platform, so a link can only ever
+       *                    be judged by what is behind it, and where even
+       *                    the listing fails the honest report is that this
+       *                    was not checked rather than a finding invented
+       *                    from an absence.
+       *   present:false    the folder is not here. Normal: `.agents/` is a
+       *                    dot-folder, Obsidian Sync never carries one, and
+       *                    on a phone it will not exist at all.
+       *   entries          one per link, with whether the skill behind it
+       *                    is readable.
+       */
+      hostSkillLinks: async (names) => {
+        /* A phone is answered before anything is read. Codex, Gemini CLI and
+           Cursor do not run on iOS or Android, so nothing here is actionable
+           there, and a sync tool that does carry dot folders (iCloud Drive,
+           git, Dropbox, unlike Obsidian Sync which drops them) would
+           otherwise hand a phone a list of links to repair on a device where
+           the thing that reads them does not exist. */
+        if (Platform && Platform.isMobile) return { supported: false, present: false, entries: [] };
+        let there = false;
+        try { there = await adapter.exists(normalizePath(HOST_LINKS_DIR)); } catch { return { supported: false, present: false, entries: [] }; }
+        if (!there) return { supported: true, present: false, entries: [] };
+
+        /* Every known skill is PROBED rather than read out of the listing,
+           because `exists` follows the link and never throws, while the
+           listing stats every entry and one dead entry ends it. The probe is
+           also the honest test: what a host needs is the skill behind the
+           link, not the link. */
+        const entries = [];
+        const seen = new Set();
+        for (const name of names || []) {
+          if (!name || seen.has(name)) continue;
+          seen.add(name);
+          let resolves = false;
+          try { resolves = await adapter.exists(normalizePath(HOST_LINKS_DIR + '/' + name + '/SKILL.md')); } catch { resolves = false; }
+          entries.push({ name, resolves, known: true });
+        }
+
+        /* The listing adds the links this vault no longer has a skill for.
+           It is allowed to fail: on desktop a link with no target makes it
+           reject, and `listable: false` carries that up as the finding it is
+           rather than as an inability to look. */
+        let listed = null;
+        try { listed = await adapter.list(normalizePath(HOST_LINKS_DIR)); } catch { listed = null; }
+        if (listed === null) return { supported: true, present: true, listable: false, entries };
+        const paths = ((listed && listed.folders) || []).concat((listed && listed.files) || []);
+        for (const raw of paths) {
+          const name = String(raw).split('/').filter(Boolean).pop();
+          if (!name || name.startsWith('.') || seen.has(name)) continue;
+          seen.add(name);
+          let resolves = false;
+          try { resolves = await adapter.exists(normalizePath(HOST_LINKS_DIR + '/' + name + '/SKILL.md')); } catch { resolves = false; }
+          entries.push({ name, resolves, known: false });
+        }
+        return { supported: true, present: true, listable: true, entries };
+      },
     };
     return self;
   }
@@ -997,12 +1590,13 @@ if (obsidian) {
       this.settings.envFilePath = normalizeEnvFilePath(this.settings.envFilePath).path || DEFAULT_ENV_FILE;
       this.lastResult = null;
       this.lastQuality = null;
+      this.lastHarness = null;
       this.store = new SecretStore(this.app.secretStorage);
       if (migrateToken(this.settings, this.store, this.backend())) await this.saveData(this.settings);
 
       this.statusEl = this.addStatusBarItem();
       this.statusEl.addClass('icor-scaffold-status');
-      this.statusEl.addEventListener('click', () => this.showResult());
+      this.registerDomEvent(this.statusEl, 'click', () => this.showResult());
       this.paintStatus(this.settings.lastHealth || 'unknown');
 
       this.registerView(VIEW_TYPE, (leaf) => new DashboardView(leaf, this));
@@ -1082,9 +1676,11 @@ if (obsidian) {
          script measures, this plugin shows. loadQuality never throws. */
       const quality = await engine.loadQuality(fs);
       this.lastQuality = quality;
+      const harness = await engine.loadHarness(fs);
+      this.lastHarness = harness;
 
       if (this.settings.writeReport) {
-        try { await this.writeReport(result, quality); } catch (e) { if (interactive) new Notice('Scaffold Check: could not write the report (' + e.message + ')'); }
+        try { await this.writeReport(result, quality, harness); } catch (e) { if (interactive) new Notice('Scaffold Check: could not write the report (' + e.message + ')'); }
       }
       try { await this.appendHistory(result, quality); } catch (e) { if (interactive) new Notice('Scaffold Check: could not write the run history, so the dashboard trend misses this run.'); }
       this.refreshDashboard();
@@ -1098,6 +1694,7 @@ if (obsidian) {
     /* The quality file as parseQuality sees it. Read fresh every time: no
        vault event fires for a hidden folder (GL-1008). */
     readQuality() { return engine.loadQuality(vaultFs(this.app)); }
+    readHarness() { return engine.loadHarness(vaultFs(this.app)); }
     readHistory() { return engine.loadHistory(vaultFs(this.app)); }
 
     /* One record per completed run into this plugin's own subfolder of
@@ -1205,13 +1802,13 @@ if (obsidian) {
       }
     }
 
-    async writeReport(result, quality) {
+    async writeReport(result, quality, harness) {
       const folder = normalizePath(this.settings.reportFolder || DEFAULT_REPORT_FOLDER);
       const fs = vaultFs(this.app);
       await fs.mkdir(folder);
       const stamp = new Date().toISOString().slice(0, 10);
       const path = normalizePath(folder + '/' + stamp + '-scaffold-check.md');
-      const text = engine.renderReport(result, { manifestUrl: this.settings.manifestUrl, quality: quality || null });
+      const text = engine.renderReport(result, { manifestUrl: this.settings.manifestUrl, quality: quality || null, harness: harness || null });
       await fs.write(path, text);
       this.lastReportPath = path;
     }
@@ -1280,9 +1877,10 @@ if (obsidian) {
     async render() {
       const plugin = this.plugin;
       const s = plugin.settings;
-      let quality, history;
+      let quality, history, harness;
       try { quality = await plugin.readQuality(); } catch (e) { quality = engine.parseQuality(null); }
       try { history = await plugin.readHistory(); } catch (e) { history = engine.parseHistory(null); }
+      try { harness = await plugin.readHarness(); } catch { harness = engine.parseHarness(null); }
       const c = this.contentEl;
       c.empty();
       c.addClass('icor-scaffold-dashboard');
@@ -1312,7 +1910,23 @@ if (obsidian) {
         ? 'Measured ' + (quality.generated || 'at an unknown time') + (quality.ageDays !== null ? ' (' + quality.ageDays + ' days ago)' : '') + (quality.scaffoldVersion ? ' · scaffold ' + quality.scaffoldVersion : '') + ' · ' + quality.findings.length + ' findings'
         : 'Nothing measured yet.' });
 
+      const hh = harness.status === 'ok' ? harness.health : 'unknown';
+      const t3 = tiles.createDiv({ cls: 'icor-scaffold-tile' });
+      t3.createDiv({ cls: 'icor-scaffold-tile-label', text: 'Harness' });
+      const h3 = t3.createDiv({ cls: 'icor-scaffold-head' });
+      h3.createSpan({ cls: 'icor-scaffold-dot icor-scaffold-dot-' + hh, attr: { 'aria-hidden': 'true' } });
+      h3.createSpan({ text: HARNESS_TEXT[hh] || HARNESS_TEXT.unknown });
+      t3.createDiv({ cls: 'icor-scaffold-meta', text: harness.status === 'ok'
+        ? harness.hosts.filter((x) => x.detected.length).length + ' of ' + harness.hosts.length + ' hosts detected'
+          + (harness.skills && harness.skills.count !== null ? ' · ' + harness.skills.count + ' skills' : '')
+          + (harness.tests ? ' · guards ' + (HARNESS_TESTED_TEXT[harness.tests.status] || harness.tests.status) : '')
+          + (harness.generated ? ' · ' + harness.generated : '')
+        : 'Nothing looked at yet.' });
+
       /* no data, or data this plugin cannot read: the one sentence */
+      if (harness.status !== 'ok') {
+        c.createEl('p', { cls: 'icor-scaffold-notice', text: harness.message });
+      }
       if (quality.status !== 'ok') {
         c.createEl('p', { cls: 'icor-scaffold-notice', text: quality.message });
       }
@@ -1356,6 +1970,30 @@ if (obsidian) {
             trend.createSpan({ cls: 'icor-scaffold-meta', text: series.length === 1 ? 'one run' : 'no runs yet' });
           }
         }
+      }
+
+      /* the hosts, one row each: what a person checks before blaming the AI */
+      if (harness.status === 'ok' && harness.hosts.length) {
+        c.createEl('h3', { text: 'Hosts' });
+        const hwrap = c.createDiv({ cls: 'icor-scaffold-tablewrap' });
+        const htable = hwrap.createEl('table', { cls: 'icor-scaffold-metrics' });
+        const hhr = htable.createEl('thead').createEl('tr');
+        for (const h of ['Host', 'Detected', 'Installed', 'Trusted', 'Guards', 'Unsupported']) hhr.createEl('th', { text: h });
+        const hbody = htable.createEl('tbody');
+        for (const x of harness.hosts) {
+          const tr = hbody.createEl('tr');
+          tr.createEl('td', { text: x.label });
+          tr.createEl('td', { text: x.detected.length ? x.detected.join(', ') : 'no' });
+          tr.createEl('td', { text: x.installed || 'nothing' });
+          tr.createEl('td', { text: HARNESS_TRUSTED_TEXT[x.trusted] || x.trusted });
+          tr.createEl('td', { text: HARNESS_TESTED_TEXT[x.tested] || x.tested });
+          tr.createEl('td', { text: x.unsupported.length ? x.unsupported.join('; ') : 'nothing' });
+        }
+        for (const x of harness.hosts) {
+          if (x.trusted === 'no' && x.trustedNote) c.createEl('p', { cls: 'icor-scaffold-notice', text: x.label + ', trust: ' + x.trustedNote });
+          if (x.sandbox && x.sandboxNote) c.createEl('p', { cls: 'icor-scaffold-meta', text: x.label + ', sandbox: ' + x.sandboxNote });
+        }
+        for (const pr of harness.problems) c.createEl('p', { cls: 'icor-scaffold-notice', text: pr });
       }
 
       const runs = history.runs.length;

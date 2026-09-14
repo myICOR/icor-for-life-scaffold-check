@@ -4,6 +4,140 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-09-14
+
+### Added
+- **The Daily Scratchpad keeps its shape.** A ninth check reads every file in
+  `00 Daily Scratchpad/` and points at the ones that are not where `GL-1004`
+  says they go: a capture loose at the room root, a capture nested only by
+  year, a note named for its subject rather than its date, and a saved view
+  buried inside a dated folder. One finding per file, because the fix is per
+  file. Each finding says what to do, and the two that have a cause worth
+  naming say the cause: the nesting one names the Daily notes and Scratchpad
+  settings that put the file there, and the title-named one names the
+  `[[wikilink]]` click that creates these by accident together with the
+  Default location for new notes setting behind it.
+
+  The shapes that pass are the ones the real tools produce: `YYYY-MM-DD.md`
+  from Obsidian's Daily notes plugin, `YYYYMMDDHHmm.md` from the Scratchpad
+  plugin with an optional ` - Title` added afterwards and Obsidian's ` 2` on a
+  same-minute collision, `Untitled.md` before a subject note is named, and
+  `YYYY-MM-DD_canvas.canvas` however you title or number it. The two legacy
+  timestamp shapes stay legal so an older vault is not called broken for its
+  history.
+
+  Gated in `test/engine.test.mjs`: four red cases, one green case that carries
+  every legal shape so the check cannot be satisfied by an empty room, and one
+  test that judges the matcher on its own. Removing the check turns four of
+  them red, which is how the gates were verified rather than assumed.
+
+- **The generated harness layer is read as generated, not as your editing.**
+  ICOR for Life Scaffold 1.23.0 stopped shipping its AI-host bindings typed by
+  hand and started generating them: `Scripts/scaffold-init.py apply` writes the
+  skills, the Codex and Gemini agent shims, the hook configs and the host
+  pointers from your vault's own frontmatter. Two vaults on the same scaffold
+  version therefore hold different bytes in those files on purpose, and the
+  three-way file check called every one of them "you edited this file" on any
+  vault that had hired a single agent.
+
+  Every generated file opens with a header naming its source and carrying a
+  content hash. That header, never a path list, is what makes a file generated
+  here, so the generator can change what it owns without this plugin learning
+  about it. The hash is recomputed the way `scaffold-init.py check` does it,
+  including the JSON case where the header lives in a value because JSON cannot
+  carry a comment. Intact means the file differs from the scaffold only because
+  your source does, and there is nothing to do. A mismatch means it was edited
+  by hand, and that is the finding, because the next apply overwrites the edit
+  without saying so. The fix line always names the generator and the source to
+  put the change in, never a hand edit and never a copy from the scaffold.
+
+  The `.claude/agents/*.md` shims are deliberately left out of this: the
+  generator classifies them as held by hand, because they carry instructions the
+  contract does not, so copying the shipped shim back in is still the right fix
+  for them. `.claude/settings.json` is its own case again, since the generator
+  owns one key in it and you own the rest.
+
+- **`.agents/skills/` is checked as what it is: per device.** The links Codex,
+  Gemini CLI and Cursor read are written by the generator, never tracked and
+  never shipped. Absent is not a finding, it means this device has not run the
+  generator. A link with no skill behind it IS a finding, because the host
+  follows it, finds nothing and reports nothing. The test is whether the skill
+  behind the link is readable rather than anything about symlinks, since the
+  vault adapter has no `lstat` on any platform; where the adapter cannot list
+  the folder the report says it was not checked here and claims nothing either
+  way.
+
+- **The Harness block.** `scaffold-init.py doctor --json` writes what it found
+  about each AI host to `.icor-for-life/scripts/harness.json`, schema 1, and
+  this plugin reads that one file and shows it in the report and on the
+  dashboard: per host what is detected, what is installed, whether the host
+  trusts this folder, whether the guards have been watched go red, and what
+  that host cannot do at all. A host with no hook system reads as not
+  applicable rather than as untested, and a skipped red test is shown, because
+  a skip is not a pass. No file yet is one sentence carrying the command, never
+  an error. The generator looks; this plugin only reads.
+
+### Changed
+- **Three groups of findings are headed with words rather than with their
+  machine name**: "Generated harness layer", "Host skill links" and "Daily
+  Scratchpad". A kind the report has no label for still uses its own name, as
+  every kind did before these three arrived.
+
+- **Nothing under `.icor-for-life/scripts/` is ever reported as drift.** The
+  per-session receipts `checkpoint.py` writes, `session.json`, `harness.json`
+  and this plugin's own run history are state, not sources (GL-1008's
+  membership test: a file belongs there only if something regenerates it).
+  `.icor-for-life/VERSION`, which does ship, is still read.
+
+- **Flint's review, three conditions, landed before release.** A dangling link
+  does not appear in a desktop listing, it ends the listing: the adapter stats
+  every entry and a link with no target throws, so the one input this check
+  exists to catch was the one input that turned it into an Info line saying
+  nothing could be looked at. A rejected listing is now the finding. Line
+  endings are normalised before any hash, because the generator writes
+  `os.linesep` on Windows and reads back under universal newlines, so without
+  this every generated file on Windows would read as hand-edited forever and
+  the fix it printed would rewrite the same bytes. And a phone is answered
+  before anything is read, since Codex, Gemini CLI and Cursor do not run
+  there, so the report says which rather than blaming the adapter.
+
+- **Whether Codex trusts this folder's hooks, in words.** Scaffold 1.23.0's
+  `doctor --json` now reads Codex's own config and says yes, NOT TRUSTED or
+  unknown, and the Harness block shows the word in the table with the sentence
+  that says what to do under it. This is worth a line of its own because the
+  failure it uncovers is silent by design: `codex exec` never asks about hooks
+  and runs none it has not been told to trust, without printing anything, so a
+  member with untrusted hooks has every guard off and a terminal that looks
+  exactly like one where they are on. A host that is not trusted lifts the
+  Harness health, so the heading can never read ok above that line. An
+  unreadable config reads unknown and never no: telling somebody their guards
+  are off because a file could not be opened sends them to fix something that
+  may not be broken. Codex's sandbox note travels in the same file and is
+  shown for the host that has one.
+
+- Gated in `test/engine.test.mjs`: 31 new cases for the harness work, 37 in this release, 49 to 86 in the file and 118 across the suite. The hash fixtures are real
+  1.23.0 generator output rather than this plugin's idea of it, one copied
+  byte for byte and one hashed by the generator's own arithmetic, because a
+  test that builds its input with the code under test proves only that the
+  code agrees with itself. Twenty gates were each watched go red by
+  removing the code behind them before any of it was trusted, and one of
+  them was rewritten because the first version stayed green with the code
+  removed.
+
+### Known
+
+- Seven `addEventListener` calls remain where the plugin guideline prefers
+  `registerDomEvent`. The one that was a clean win, the status bar item
+  registered once in `onload`, is changed. The other six are not, on purpose:
+  three are in a `Modal` and a `PluginSettingTab`, neither of which is a
+  `Component`, so the only `registerDomEvent` available belongs to the plugin
+  and would hold every handler until unload, which for a modal opened
+  repeatedly is a leak rather than a fix. The other three are in a view that
+  re-renders on a button press and `empty()`s its own container each time, so
+  registering them on the view would accumulate handlers per render while the
+  nodes they point at are already gone. In every one of the six the listener
+  dies with the node. Revisit if any of those containers stops being emptied.
+
 ## [0.4.0] - 2026-09-09
 
 ### Added
