@@ -4,6 +4,23 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-09-15
+
+### Fixed
+- **The report note is now dated by the day on your own clock, not by the
+  day it is in Greenwich.** West of UTC an evening run wrote tomorrow's
+  date onto today's findings; east of UTC an early-morning run wrote
+  yesterday's and overwrote the note already there. The filename, the
+  note's `date` field and its heading now all come from one reading of
+  your clock, and the dashboard's and the settings tab's Last run read the
+  same way. Running twice in one day still overwrites that day's note, as
+  the setting says it does.
+
+  Reported by Brian Carroll in the bug reports channel.
+- **The settings tab dates the last run by your day, not by UTC.** It
+  printed the stored ISO instant raw and disagreed with the dashboard tile
+  two rows away.
+
 ## [0.5.0] - 2026-09-14
 
 ### Added
