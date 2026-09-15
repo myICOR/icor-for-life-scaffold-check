@@ -68,6 +68,38 @@ const DEFAULT_MANIFEST_URL =
 const DEFAULT_REPORT_FOLDER = '06 AI Team/AI Team Knowledge/Scaffold Check';
 const STATUS_TEXT = { ok: 'Scaffold ok', attention: 'Scaffold: attention', broken: 'Scaffold: broken', offline: 'Scaffold: offline', unknown: 'Scaffold: not checked' };
 
+/* ================================================== the local clock ===== */
+
+/* A CALENDAR DAY IS NEVER THE FIRST TEN CHARACTERS OF AN INSTANT.
+ * `toISOString()` renders in UTC, so slicing it answers "which day is it in
+ * Greenwich", which is not the question anyone is asking of a note in their
+ * own vault. West of UTC an evening run is dated tomorrow; east of it an
+ * early-morning run is dated yesterday and overwrites the note already
+ * sitting there. The instant is still the right thing to STORE, and
+ * `lastRun` still stores one; it is only the day drawn out of it that has
+ * to come from the wall clock. Ported from the Planner, which learned it
+ * first. */
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+
+/* The day a wall clock in this timezone is showing for `d`. */
+function localDayStr(d) {
+  return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate());
+}
+
+/* Today, here. */
+function todayStr() { return localDayStr(new Date()); }
+
+/* The local day of a STORED instant; '' when there is nothing to read, so a
+   caller can fall back to showing what it has rather than a broken date. */
+function localDayOfIso(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : localDayStr(d);
+}
+
+const ISO_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 /* ======================================================= the engine ===== */
 
 /* "1.4.2" -> [1,4,2]; anything unparseable -> null. */
@@ -1096,8 +1128,10 @@ const COLLAPSE_SUMMARY = {
    is a parseQuality() result; absent, the quality section says there is no
    data yet. */
 function renderReport(result, opts) {
-  const o = Object.assign({ now: new Date(), manifestUrl: '', vaultName: '', quality: null, harness: null }, opts || {});
-  const stamp = o.now.toISOString().slice(0, 10);
+  const o = Object.assign({ now: new Date(), today: '', manifestUrl: '', vaultName: '', quality: null, harness: null }, opts || {});
+  /* The caller passes the day it named the file after, so the note and its
+     own filename cannot disagree. Without one, the local day of `now`. */
+  const stamp = ISO_DAY_RE.test(String(o.today)) ? String(o.today) : localDayStr(o.now);
   const L = [];
   L.push('---');
   L.push('type: scaffold-check');
@@ -1271,7 +1305,7 @@ function sparklinePath(values, width, height) {
   }).join(' ');
 }
 
-const engine = { parseVersion, compareVersions, baseFolders, scratchpadProblem, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, generatedState, generatedHeaderLine, isHarnessPath, isPartlyGenerated, isMachineState, parseHarness, loadHarness, harnessFrontmatter, renderHarness, KIND_LABELS, COLLAPSE_SUMMARY, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS, GEN_MARK, GEN_SCRIPT, HARNESS_PATH, HARNESS_SCHEMA, HARNESS_TEXT, HARNESS_TESTED_TEXT, HARNESS_TRUSTED_TEXT, HARNESS_HOST_LABELS, HOST_LINKS_DIR, SKILLS_DIR, NO_HARNESS_DATA };
+const engine = { localDayStr, todayStr, localDayOfIso, parseVersion, compareVersions, baseFolders, scratchpadProblem, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, generatedState, generatedHeaderLine, isHarnessPath, isPartlyGenerated, isMachineState, parseHarness, loadHarness, harnessFrontmatter, renderHarness, KIND_LABELS, COLLAPSE_SUMMARY, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS, GEN_MARK, GEN_SCRIPT, HARNESS_PATH, HARNESS_SCHEMA, HARNESS_TEXT, HARNESS_TESTED_TEXT, HARNESS_TRUSTED_TEXT, HARNESS_HOST_LABELS, HOST_LINKS_DIR, SKILLS_DIR, NO_HARNESS_DATA };
 
 /* ============================================= where the token lives ===== */
 /*
@@ -1806,9 +1840,13 @@ if (obsidian) {
       const folder = normalizePath(this.settings.reportFolder || DEFAULT_REPORT_FOLDER);
       const fs = vaultFs(this.app);
       await fs.mkdir(folder);
-      const stamp = new Date().toISOString().slice(0, 10);
-      const path = normalizePath(folder + '/' + stamp + '-scaffold-check.md');
-      const text = engine.renderReport(result, { manifestUrl: this.settings.manifestUrl, quality: quality || null, harness: harness || null });
+      /* One reading of the clock for both the name and the contents: two
+         readings can fall either side of a midnight and disagree. Re-running
+         on the same day overwrites that day's note, which is what the
+         setting promises. */
+      const today = todayStr();
+      const path = normalizePath(folder + '/' + today + '-scaffold-check.md');
+      const text = engine.renderReport(result, { today, manifestUrl: this.settings.manifestUrl, quality: quality || null, harness: harness || null });
       await fs.write(path, text);
       this.lastReportPath = path;
     }
@@ -1897,7 +1935,7 @@ if (obsidian) {
       h1.createSpan({ text: STATUS_TEXT[scaffoldHealth] || STATUS_TEXT.unknown });
       t1.createDiv({ cls: 'icor-scaffold-meta', text: r
         ? r.counts.broken + ' broken · ' + r.counts.attention + ' attention · ' + r.counts.info + ' info · installed ' + (r.installedVersion || 'unknown') + ', latest ' + (r.latestVersion || 'unknown')
-        : (s.lastRun ? 'Last run ' + s.lastRun.slice(0, 10) + '. Run the check for the details.' : 'Not run yet.') });
+        : (s.lastRun ? 'Last run ' + (localDayOfIso(s.lastRun) || s.lastRun) + '. Run the check for the details.' : 'Not run yet.') });
 
       const qh = quality.status === 'ok' ? quality.health : 'unknown';
       const t2 = tiles.createDiv({ cls: 'icor-scaffold-tile' });
