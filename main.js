@@ -2129,7 +2129,7 @@ if (obsidian) {
       new Setting(c).setName('Report folder')
         .addText((t) => t.setValue(s.reportFolder).setPlaceholder(DEFAULT_REPORT_FOLDER).onChange(async (v) => { s.reportFolder = v.trim() || DEFAULT_REPORT_FOLDER; await save(); }));
       new Setting(c).setName('Run now').addButton((b) => b.setButtonText('Run the Scaffold Check').setCta().onClick(() => plugin.run({ interactive: true })));
-      if (s.lastRun) c.createEl('p', { cls: 'icor-scaffold-meta', text: 'Last run ' + s.lastRun + ' · ' + (STATUS_TEXT[s.lastHealth] || '') });
+      if (s.lastRun) c.createEl('p', { cls: 'icor-scaffold-meta', text: 'Last run ' + (localDayOfIso(s.lastRun) || s.lastRun) + ' · ' + (STATUS_TEXT[s.lastHealth] || '') });
     }
 
     /* One row: where a token exists right now, and a Move button for each

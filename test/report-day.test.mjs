@@ -206,4 +206,5 @@ test('SOURCE: no calendar day in this file is the UTC slice of an instant', () =
   const code = main.split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
   assert.ok(!/toISOString\(\)\.slice\(0, ?10\)/.test(code), 'a calendar day is never the first ten characters of an instant: use localDayStr');
   assert.ok(!/lastRun\.slice\(0, ?10\)/.test(code), 'lastRun is a stored instant, so the same rule holds when it is shown: use localDayOfIso');
+  assert.ok(!/'Last run ' \+ s\.lastRun/.test(code), 'a stored instant is never printed raw: show it as localDayOfIso(s.lastRun) || s.lastRun');
 });
