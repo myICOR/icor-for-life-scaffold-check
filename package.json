@@ -1,9 +1,9 @@
 {
   "name": "icor-for-life-scaffold-check",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.mjs"
   },
-  "license": "LicenseRef-ICOR-Source-Available-1.0"
+  "license": "MIT"
 }

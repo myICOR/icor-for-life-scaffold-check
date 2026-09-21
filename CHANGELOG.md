@@ -4,6 +4,13 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-09-21
+
+### Changed
+- Relicensed under MIT. Releases before 0.6.0 remain under the ICOR for Life
+  Source-Available License (Code) v1.0.
+- Release workflow: the guard job's checkout pinned to a commit SHA.
+
 ## [0.5.1] - 2026-09-15
 
 ### Fixed
