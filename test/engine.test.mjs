@@ -332,6 +332,27 @@ test('RED 1b: the shipped agent found by id under another name is info, and neit
   assert.equal(r.health, 'ok');
 });
 
+test('RED 1b: a renamed shipped agent\'s companion files and avatar are not reported missing either', async () => {
+  const LARRY = '06 AI Team/Agents/Larry/';
+  const AVATAR = '06 AI Team/AI Team Knowledge/Avatars/larry.png';
+  const remote = remoteManifest({
+    files: remoteManifest().files.concat([
+      { path: LARRY + 'AGENT.md', sha256: sha('a'), kind: 'agent', example: false },
+      { path: LARRY + 'Larry.md', sha256: sha('b'), kind: 'agent', example: false },
+      { path: LARRY + 'SOUL.md', sha256: sha('c'), kind: 'agent', example: false },
+      { path: AVATAR, sha256: sha('d'), kind: 'asset', example: false },
+      { path: '06 AI Team/AI Team Knowledge/Avatars/pax.png', sha256: sha('e'), kind: 'asset', example: false },
+    ]),
+    agents: remoteManifest().agents.concat([{ name: 'Larry', myicor_id: ID.larry, path: LARRY + 'AGENT.md', shim: null }]),
+  });
+  const files = cleanFiles();
+  files['06 AI Team/Agents/Nancy/AGENT.md'] = contract('Nancy', ID.larry);
+  files['06 AI Team/Agents/Nancy/SOUL.md'] = '# Soul\n';
+  const r = await run(files, { remote });
+  const missing = r.findings.filter((x) => x.kind === 'file' && x.severity === 'attention').map((x) => x.path);
+  assert.deepEqual(missing, ['06 AI Team/AI Team Knowledge/Avatars/pax.png'], 'only the unrelated avatar is still missing');
+});
+
 test('RED 1b: renamed agent, but the shim is gone everywhere: the shim IS still reported missing', async () => {
   const files = cleanFiles();
   delete files[PENN_PATH]; delete files[PENN_SHIM];
