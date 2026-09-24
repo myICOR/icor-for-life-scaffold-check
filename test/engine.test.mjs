@@ -1142,11 +1142,22 @@ test('the harness reaches the report note through renderReport', async () => {
 });
 
 test('loadHarness reads the file at the path GL-1008 gives it, and absent never throws', async () => {
+  /* 0.7.0: the harness is team state, `.mypka/state/harness.json` first; the
+     pre-split location is still read, second, and labelled as old. */
   const files = cleanFiles();
   files['.icor-for-life/scripts/harness.json'] = HARNESS_JSON;
-  assert.equal(engine.HARNESS_PATH, '.icor-for-life/scripts/harness.json');
+  assert.equal(engine.HARNESS_PATH, '.mypka/state/harness.json');
+  assert.equal(engine.HARNESS_PATH_OLD, '.icor-for-life/scripts/harness.json');
   const there = await engine.loadHarness(vault(files, cleanFolders));
   assert.equal(there.status, 'ok');
+  assert.equal(there.oldLocation, true);
+  assert.ok(engine.renderHarness(there).join('\n').includes('**Old location:**'));
+  files['.mypka/state/harness.json'] = HARNESS_JSON.replace('"scaffold_version":"1.23.0"', '"scaffold_version":null,"mypka_version":"1.0.0"');
+  const both = await engine.loadHarness(vault(files, cleanFolders));
+  assert.equal(both.path, '.mypka/state/harness.json', 'the new location wins when both exist');
+  assert.equal(both.oldLocation, false);
+  assert.equal(both.mypkaVersion, '1.0.0');
+  assert.ok(engine.renderHarness(both).join('\n').includes('against myPKA 1.0.0'));
   const gone = await engine.loadHarness(vault(cleanFiles(), cleanFolders));
   assert.equal(gone.status, 'missing');
 });

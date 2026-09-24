@@ -36,11 +36,18 @@ class Notice { constructor(message) { this.message = message; } }
 
 const Platform = { isMobile: false, isDesktopApp: true };
 
-async function requestUrl() { throw new Error('requestUrl is not available in tests'); }
+/* A test that needs a network answer sets `stub.onRequest` to a function of
+   the request; anything else still refuses, so no test reaches the network
+   by accident. */
+const stub = { onRequest: null };
+async function requestUrl(req) {
+  if (typeof stub.onRequest === 'function') return stub.onRequest(req);
+  throw new Error('requestUrl is not available in tests');
+}
 
 /* Obsidian's own: collapse repeats, drop a leading and trailing slash. */
 function normalizePath(p) {
   return String(p == null ? '' : p).replace(/\\/g, '/').replace(/\/+/g, '/').replace(/^\/|\/$/g, '');
 }
 
-module.exports = { Plugin, PluginSettingTab, Setting, Notice, Modal, ItemView, Platform, requestUrl, normalizePath };
+module.exports = { Plugin, PluginSettingTab, Setting, Notice, Modal, ItemView, Platform, requestUrl, normalizePath, stub };

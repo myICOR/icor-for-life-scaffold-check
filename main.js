@@ -2,18 +2,29 @@
  * ICOR for Life - Scaffold Check: is this vault up to date with the ICOR for
  * Life Scaffold, and is what it has still intact?
  *
+ * Since 0.7.0 the one scaffold is two products: ICOR for Life (the content
+ * vault, version folder `.icor-for-life/`) and myPKA (the AI team, version
+ * folder `.mypka/`). A vault holds both (mode A), only the content (mode B,
+ * the team in its own folder), or only the team (a team folder opened as a
+ * vault). The check says which, checks what is here, and says in one line
+ * that the other half lives elsewhere; it never calls it missing.
+ *
  * What it does:
- *   1. Reads the vault's own version folder, `.icor-for-life/` (VERSION and
- *      manifest.json), which says which scaffold version this vault was
- *      copied from.
- *   2. Fetches the manifest of the LATEST scaffold version from a URL set in
- *      the settings.
+ *   1. Reads the vault's own version folders, `.icor-for-life/` and
+ *      `.mypka/` (VERSION and manifest.json each), which say which release
+ *      of each product this vault was copied from.
+ *   2. Fetches the manifest of the LATEST release of each product from the
+ *      URLs set in the settings: two outbound requests, the myPKA one only
+ *      when its URL is set. Both manifest shapes are read (the list shape
+ *      of 1.x, the map shape since the split; schema 1 and 2).
  *   3. Compares the two against the files actually on disk and reports:
  *        - the version gap;
  *        - every canonical file that is MISSING, CHANGED BY YOU, or CHANGED
  *          UPSTREAM since you installed (three answers, three actions);
  *        - LEFTOVERS: files the scaffold removed or moved after your version
- *          that are still here, each with the changelog line that explains it;
+ *          that are still here, each with the changelog line that explains it.
+ *          A file one product stopped shipping because the OTHER product
+ *          ships it now is a move, never a leftover;
  *        - structure: the rooms, the plugins the vault expects, every Base
  *          pointing at a folder that exists, every enabled snippet present;
  *        - AGENT IDENTITY: every agent contract carries a stable `myicor_id`
@@ -108,12 +119,184 @@ function parseVersion(v) {
   return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 
-/* -1, 0, 1 ; null when either side is not a version. */
+/* The pre-release part of "2.0.0-lab.1" ("lab.1"), or null for a release. */
+function preRelease(v) {
+  const m = /^\d+\.\d+\.\d+-([0-9A-Za-z.-]+)/.exec(String(v || '').trim());
+  return m ? m[1] : null;
+}
+
+/* -1, 0, 1 ; null when either side is not a version. Semver precedence
+   (0.7.0): a pre-release sorts BELOW its release, so 2.0.0-lab < 2.0.0, the
+   same order the manifest builders sort in. Identifiers compare one dot
+   segment at a time, numbers numerically and below words. Build metadata
+   ("+abc") is ignored, as semver says. */
 function compareVersions(a, b) {
   const pa = parseVersion(a), pb = parseVersion(b);
   if (!pa || !pb) return null;
   for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
+  const ra = preRelease(a), rb = preRelease(b);
+  if (ra === rb) return 0;
+  if (ra === null) return 1;
+  if (rb === null) return -1;
+  const xa = ra.split('.'), xb = rb.split('.');
+  for (let i = 0; i < Math.max(xa.length, xb.length); i++) {
+    if (xa[i] === undefined) return -1;
+    if (xb[i] === undefined) return 1;
+    const na = /^\d+$/.test(xa[i]), nb = /^\d+$/.test(xb[i]);
+    if (na && nb) {
+      if (Number(xa[i]) !== Number(xb[i])) return Number(xa[i]) < Number(xb[i]) ? -1 : 1;
+      continue;
+    }
+    if (na !== nb) return na ? -1 : 1;
+    if (xa[i] !== xb[i]) return xa[i] < xb[i] ? -1 : 1;
+  }
   return 0;
+}
+
+/* The numeric core only: "2.0.0-lab" and "2.0.0" are the same release line.
+   Used where the question is "is this at or after the split", not which of
+   two builds is newer. */
+function compareCore(a, b) {
+  const pa = parseVersion(a), pb = parseVersion(b);
+  if (!pa || !pb) return null;
+  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i] < pb[i] ? -1 : 1;
+  return 0;
+}
+
+/* ------------------------------------------------- manifest shapes ----- */
+/*
+ * THE SPLIT (ICOR for Life Scaffold 2.0.0, myPKA 1.0.0). The one scaffold
+ * became two products: ICOR for Life (the content vault, `.icor-for-life/`)
+ * and myPKA (the AI team, `.mypka/`). Their manifests changed shape while
+ * `schema` stayed 1 for a while:
+ *
+ *   list shape (1.x): files: [{ path, sha256, kind, example }]
+ *   map shape (2.0.0-lab on): files: { path: sha256 }, the manifest itself
+ *     as "self", no kind and no example flag (an `examples` list instead),
+ *     plus `seed`, `previous`, `requires` / `implements`.
+ *
+ * normalizeManifest reads both into one shape, so nothing below it ever
+ * branches on the shape again. It branches on `schema` first (1 or 2 are
+ * read; anything else is refused with a sentence) and on the shape of
+ * `files` second, because a schema 1 manifest can carry either shape.
+ */
+const MYPKA_DIR = '.mypka';
+const MANIFEST_SCHEMAS = [1, 2];
+/* The rooms GL-1013 §6 uses as the content marker. */
+const CONTENT_ROOMS = ['00 Daily Scratchpad', '01 Inbox', '03 WiP', '04 Inner World'];
+/* The release the split happened in: a removal at or after it may be a move. */
+const SPLIT_VERSION = '2.0.0';
+
+/* The builder's own `kind_of` (build-scaffold-manifest.py), ported once so a
+   map-shape manifest, which no longer carries a kind, still reads
+   "Canonical guideline is missing" and never "Canonical undefined". */
+function kindOf(path) {
+  const p = String(path || '');
+  if (p.endsWith('.base')) return 'base';
+  if (p.includes('/Guidelines/')) return 'guideline';
+  if (p.includes('/SOPs/')) return 'sop';
+  if (p.includes('/Workstreams/')) return 'workstream';
+  if (p.includes('/Agents/')) return 'agent';
+  if (p.includes('/Scripts/')) return 'script';
+  if (p.includes('/Avatars/') || p.includes('/Brand/')) return 'asset';
+  if (p.startsWith('.obsidian/')) return 'config';
+  if (p.startsWith('.claude/')) return 'claude';
+  return 'doc';
+}
+
+const strings = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string' && s) : []);
+
+/*
+ * normalizeManifest(raw) -> {
+ *   normalized: true, schema, shape: 'list'|'map', name, version,
+ *   files: Map(path -> { path, sha256, kind, example, seed }),
+ *   agents: [..] or null, history: [..], historyPresent,
+ *   previous: { path: [sha256] } or null, examplesKnown,
+ *   rooms, plugins, snippets, bases, implements, requires }
+ *
+ * `examplesKnown` is false when the manifest says nothing about examples
+ * (a map-shape manifest without `examples`): every `example` is then false
+ * and nothing more is claimed. Throws only when `files` is neither a list
+ * nor an object, or the schema is one this plugin does not read.
+ */
+function normalizeManifest(raw) {
+  if (raw && raw.normalized === true && raw.files instanceof Map) return raw;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('the latest manifest is not a scaffold manifest');
+  if (raw.schema !== undefined && !MANIFEST_SCHEMAS.includes(raw.schema)) {
+    throw new Error('the manifest carries schema ' + JSON.stringify(raw.schema) + ' and this plugin reads schemas ' + MANIFEST_SCHEMAS.join(' and ') + '; update the plugin');
+  }
+  const src = raw.files;
+  const shape = Array.isArray(src) ? 'list' : (src && typeof src === 'object') ? 'map' : null;
+  if (!shape) throw new Error('the latest manifest is not a scaffold manifest');
+  const seed = new Set(strings(raw.seed));
+  const listed = Array.isArray(raw.examples) ? new Set(strings(raw.examples)) : null;
+  const flagged = new Set();
+  const files = new Map();
+  if (shape === 'list') {
+    for (const f of src) {
+      if (!f || typeof f !== 'object' || typeof f.path !== 'string' || !f.path) continue;
+      if (f.example === true) flagged.add(f.path);
+      files.set(f.path, { path: f.path, sha256: typeof f.sha256 === 'string' ? f.sha256 : '', kind: typeof f.kind === 'string' && f.kind ? f.kind : kindOf(f.path) });
+    }
+  } else {
+    for (const path of Object.keys(src)) {
+      const v = src[path];
+      if (v === 'self' || typeof v !== 'string' || !path) continue; /* the manifest's own entry */
+      files.set(path, { path, sha256: v, kind: kindOf(path) });
+    }
+  }
+  const examples = listed || (shape === 'list' ? flagged : null);
+  for (const f of files.values()) {
+    f.example = !!(examples && examples.has(f.path));
+    f.seed = seed.has(f.path);
+  }
+  return {
+    normalized: true,
+    schema: typeof raw.schema === 'number' ? raw.schema : null,
+    shape,
+    name: typeof raw.name === 'string' ? raw.name : '',
+    version: typeof raw.version === 'string' ? raw.version : null,
+    files,
+    examplesKnown: !!examples,
+    agents: Array.isArray(raw.agents) ? raw.agents : null,
+    history: Array.isArray(raw.history) ? raw.history : [],
+    historyPresent: Array.isArray(raw.history),
+    previous: raw.previous && typeof raw.previous === 'object' && !Array.isArray(raw.previous) ? raw.previous : null,
+    rooms: strings(raw.rooms),
+    plugins: strings(raw.plugins),
+    snippets: Array.isArray(raw.snippets) ? raw.snippets : null,
+    bases: Array.isArray(raw.bases) ? raw.bases : [],
+    implements: typeof raw.implements === 'string' ? raw.implements : null,
+    requires: typeof raw.requires === 'string' ? raw.requires : null,
+  };
+}
+
+/* The same, for a manifest that may be broken: null instead of a throw. A
+   vault's own manifest is evidence, never a reason to stop the check. */
+function normalizeOrNull(raw) {
+  if (!raw) return null;
+  try { return normalizeManifest(raw); } catch (e) { return null; }
+}
+
+/* ------------------------------------------------ the installed pair ---- */
+/* GL-1013 §8.1: myPKA `requires: "icor-concepts >=1 <2"`, ICOR for Life
+   `implements: "icor-concepts/1"`. Parsed with exactly these two patterns;
+   anything else is "not verified", never a verdict. */
+function parseRequires(s) {
+  const m = /^icor-concepts >=(\d+) <(\d+)$/.exec(String(s || '').trim());
+  return m ? { lo: Number(m[1]), hi: Number(m[2]) } : null;
+}
+function parseImplements(s) {
+  const m = /^icor-concepts\/(\d+)$/.exec(String(s || '').trim());
+  return m ? Number(m[1]) : null;
+}
+
+/* The GitHub token goes only to GitHub. Before 0.7.0 it went to whatever
+   host the URL setting named; with two URLs that risk doubled. */
+const TOKEN_HOSTS = ['github.com', 'api.github.com', 'raw.githubusercontent.com'];
+function tokenAllowedFor(url) {
+  const m = /^https:\/\/([^/?#:]+)(?::\d+)?(?:[/?#]|$)/i.exec(String(url || '').trim());
+  return !!m && TOKEN_HOSTS.includes(m[1].toLowerCase());
 }
 
 /* The folders a .base filters on. Same regex the scaffold's own check-bases
@@ -134,7 +317,12 @@ function removalsSince(manifest, installed) {
   for (const h of manifest.history || []) {
     const after = installed ? compareVersions(h.version, installed) > 0 : true;
     if (!after) continue;
-    for (const r of h.removed || []) out.push({ path: r.path, sha256: r.sha256 || '', note: r.note || '', version: h.version });
+    for (const r of h.removed || []) {
+      if (!r || typeof r.path !== 'string') continue;
+      /* `moved_to` (the builders from schema 2): the file did not go away,
+         it moved to the other product. Carried so a caller can say so. */
+      out.push({ path: r.path, sha256: r.sha256 || '', note: r.note || '', version: h.version, movedTo: typeof r.moved_to === 'string' ? r.moved_to : '' });
+    }
     for (const r of h.renamed || []) out.push({ path: r.from, sha256: r.from_sha256 || '', note: 'renamed to `' + r.to + '`', version: h.version, to: r.to });
   }
   return out;
@@ -263,7 +451,8 @@ const HARNESS_PATHS = [
   /^\.codex\/agents\/[^/]+\.toml$/,
   /^\.codex\/(hooks\.json|config\.toml)$/,
   /^\.gemini\/agents\/[^/]+\.md$/,
-  /^GEMINI\.md$/,
+  /* `GEMINI.md` left this list in 0.7.0: the split removed it (b8y), so a
+     missing one is not a generated file to regenerate. */
 ];
 function isHarnessPath(p) { return HARNESS_PATHS.some((re) => re.test(String(p))); }
 
@@ -286,8 +475,21 @@ const MACHINE_STATE = [
   /^\.icor-for-life\/scripts\/harness\.json$/,
   /^\.icor-for-life\/scripts\/quality\.json$/,
   /^\.icor-for-life\/icor-for-life-[^/]+\//,
+  /* myPKA's machine layer (0.7.0): the team's regenerated state, the
+     member's own sources file, and installed expansions. */
+  /^\.mypka\/state\//,
+  /^\.mypka\/sources\.yaml$/,
+  /^\.mypka\/expansions\//,
 ];
 function isMachineState(p) { return MACHINE_STATE.some((re) => re.test(String(p))); }
+
+/* The version folders' own descriptors. Since the split they are hashed
+   into `files`, so every older install would read "changed upstream" for
+   them; the version gap already says that, once. The concept schema and
+   the two `sources*.example` files are NOT here: a changed example matters
+   (Vex residual 2). */
+const DESCRIPTORS = /^\.(icor-for-life|mypka)\/(VERSION|CHANGELOG\.md|README\.md|manifest\.json)$/;
+function isDescriptor(p) { return DESCRIPTORS.test(String(p)); }
 
 /* The first line that is a generated header, or null.
    A header is the marker AND a `content-hash:` on the SAME line, never the
@@ -385,14 +587,15 @@ async function readContracts(fs) {
  * another slug). A manifest without `agents` (older than 1.11.0) runs
  * rule 2 only and says so once.
  */
-async function checkAgents({ fs, remote, add }) {
+async function checkAgents({ fs, remote, add, metaDir, product }) {
+  const from = product || 'scaffold';
   const skipMissing = new Set();
   const contracts = await readContracts(fs);
   const claimed = new Set(); /* paths rule 1 already reported; rule 2 stays quiet on them */
 
   const shipped = Array.isArray(remote.agents) ? remote.agents : null;
   if (!shipped) {
-    add('agents', 'info', META_DIR + '/manifest.json',
+    add('agents', 'info', (metaDir || META_DIR) + '/manifest.json',
       'The latest manifest predates agent identities (no `agents` key), so shipped agents are matched by path only.',
       'Nothing to do. A newer scaffold manifest names one id per shipped agent, and this check will then find a renamed agent by its id.');
   } else {
@@ -425,7 +628,7 @@ async function checkAgents({ fs, remote, add }) {
             'Run the hiring SOP step or `mint-agent-ids.py --map` with the scaffold\'s export, so ' + a.name + ' receives the id the scaffold knows it by: ' + a.myicor_id + '.');
         } else {
           add('agents', 'attention', a.path, '`' + a.path + '` is a different agent than the shipped ' + a.name + ' (different id); the shipped one is missing.',
-            'If this is your own agent, give it its own folder, then copy the shipped ' + a.name + ' in from the latest scaffold. Never change the id on either file to make them match.');
+            'If this is your own agent, give it its own folder, then copy the shipped ' + a.name + ' in from the latest ' + from + '. Never change the id on either file to make them match.');
         }
       }
       /* case d: found nowhere; the file check reports the canonical path missing, as before */
@@ -459,77 +662,158 @@ async function checkAgents({ fs, remote, add }) {
 }
 
 /*
- * runChecks({ fs, hash, remote, local, installedVersion, configDir })
+ * runChecks({ fs, hash, remote, local, installedVersion, configDir, ...opts })
  *
  *   fs.exists(path) -> bool, fs.read(path) -> string, fs.readBinary(path)
  *   -> ArrayBuffer|Buffer, fs.listBases() -> [paths of every .base outside
  *   .obsidian], fs.listAgentContracts() -> [every 06 AI Team/Agents/<Name>/
  *   AGENT.md], fs.listShims() -> [every .claude/agents/<slug>.md]  (all async)
  *   hash(bytes) -> hex sha256 (async)
- *   remote: the latest manifest (parsed). local: the vault's own manifest or
- *   null. installedVersion: the VERSION file's content or null. configDir:
- *   the vault's config folder (`app.vault.configDir`), default `.obsidian`;
- *   a device on a config-folder profile keeps its plugins elsewhere.
+ *   remote: the latest manifest, either shape (normalizeManifest). local:
+ *   the vault's own manifest, either shape, or null. installedVersion: the
+ *   VERSION file's content or null. configDir: the vault's config folder
+ *   (`app.vault.configDir`), default `.obsidian`; a device on a
+ *   config-folder profile keeps its plugins elsewhere.
  *
- * Returns { health, installedVersion, latestVersion, findings, counts }.
- * A finding: { kind, severity, path, message, action, since? }.
+ * ONE product per call (0.7.0). The options say which, and the defaults are
+ * the single-scaffold check every version before 0.7.0 ran:
+ *   repo ('icor' | 'mypka'), metaDir (the version folder), product (the
+ *   words a fix names: "Copy it in from the latest <product>"),
+ *   agents / structure / hostLinks (which blocks run: myPKA owns the agent
+ *   identities and the host links, ICOR for Life the rooms, Bases,
+ *   plugins, snippets and the Scratchpad),
+ *   syncFold (fold dot-folder paths a Sync device cannot have into one
+ *   line), otherRemote (the OTHER product's latest manifest: a removal it
+ *   ships is a move, never a leftover; null means "could not be read", and
+ *   undefined means "there is no other product", the pre-0.7.0 case),
+ *   splitVersion (with otherRemote null: removals at or after it are not
+ *   judged), quietMissingVersion (the caller has already said why there is
+ *   no version, as in a vault installed before the split).
+ *
+ * Returns { repo, health, installedVersion, latestVersion, findings, counts }.
+ * A finding: { kind, severity, path, message, action, repo, since? }.
  * severity: 'broken' (structure the vault relies on is gone), 'attention'
  * (something to do), 'info' (worth knowing, nothing to do).
  */
-async function runChecks({ fs, hash, remote, local, installedVersion, configDir }) {
+async function runChecks(args) {
+  const { fs, hash, configDir } = args;
   const cfg = (configDir || '.obsidian').replace(/\/+$/, '');
+  const repo = args.repo || 'icor';
+  const metaDir = args.metaDir || META_DIR;
+  const product = args.product || 'scaffold';
   const findings = [];
   const add = (kind, severity, path, message, action, extra) =>
-    findings.push(Object.assign({ kind, severity, path, message, action }, extra || {}));
+    findings.push(Object.assign({ kind, severity, path, message, action, repo }, extra || {}));
 
-  if (!remote || typeof remote !== 'object' || !Array.isArray(remote.files)) {
+  if (!args.remote || typeof args.remote !== 'object' || !('files' in args.remote)) {
     throw new Error('the latest manifest is not a scaffold manifest');
   }
+  const remote = normalizeManifest(args.remote);
+  const local = normalizeOrNull(args.local);
   const latest = remote.version || null;
-  const installed = installedVersion || (local && local.version) || null;
+  /* `localVersion: false`: the local manifest is borrowed evidence of which
+     bytes were installed (a pre-split vault's ICOR manifest, read for the
+     team files), never the version of THIS product. */
+  const installed = args.installedVersion || (args.localVersion !== false && args.local && typeof args.local.version === 'string' ? args.local.version : null) || null;
+
+  /* Obsidian Sync never carries a dot folder (only the config folder), so on
+     a device that got the vault through Sync, `.mypka/`, `.claude/` and the
+     rest are simply not there. That is not damage, and fifty "missing"
+     lines would bury the one line that says why (GL-1013: warn, never
+     refuse). A dot path whose TOP folder or file is absent is counted into
+     one line; a dot folder that exists with a file missing inside it is
+     still reported file by file. */
+  const syncFold = args.syncFold === true;
+  /* A vault that predates this product's version folder: its files are not
+     "missing", the caller has already said to install the folder. */
+  const metaNotInstalled = args.metaNotInstalled === true;
+  const cfgTop = cfg.split('/')[0];
+  const topAbsent = new Map();
+  const folded = { count: 0, tops: new Set() };
+  async function absentDotTop(p) {
+    if (!syncFold) return null;
+    const top = String(p).split('/')[0];
+    if (!top.startsWith('.') || top === cfgTop) return null;
+    if (!topAbsent.has(top)) {
+      let there = false;
+      try { there = !!(await fs.exists(top)); } catch (e) { there = false; }
+      topAbsent.set(top, !there);
+    }
+    return topAbsent.get(top) ? top : null;
+  }
+  const metaAbsent = syncFold && !!(await absentDotTop(metaDir));
 
   /* 1. the version gap */
   if (!installed) {
-    add('version', 'info', META_DIR + '/VERSION',
-      'This vault does not carry a scaffold version, so every removal in the scaffold\'s history is treated as possibly still here.',
-      'Add `.icor-for-life/VERSION` with the version you installed, or update to the latest scaffold and take its version folder.');
+    if (metaAbsent) {
+      folded.tops.add(metaDir); /* said once, in the Sync line below */
+    } else if (!args.quietMissingVersion) {
+      add('version', 'info', metaDir + '/VERSION',
+        'This vault does not carry a ' + product + ' version, so every removal in the ' + product + '\'s history is treated as possibly still here.',
+        'Add `' + metaDir + '/VERSION` with the version you installed, or update to the latest ' + product + ' and take its version folder.');
+    }
   } else if (compareVersions(installed, latest) < 0) {
-    add('version', 'attention', META_DIR + '/VERSION',
+    add('version', 'attention', metaDir + '/VERSION',
       'Installed ' + installed + ', latest ' + latest + '.',
       'Read the changelog for every version after ' + installed + ' before updating; the leftover findings below are the parts that need a hand.');
   } else if (compareVersions(installed, latest) > 0) {
-    add('version', 'info', META_DIR + '/VERSION',
+    add('version', 'info', metaDir + '/VERSION',
       'Installed ' + installed + ' is newer than the latest published ' + latest + '.',
       'Nothing to do; you are ahead of the manifest this check fetched.');
   }
 
   /* 2. rooms: the folders the scaffold relies on */
-  for (const room of remote.rooms || []) {
-    if (!(await fs.exists(room))) {
-      add('room', 'broken', room, 'Required folder is missing.', 'Create it. The scaffold and its plugins write here and will fail without it.');
+  if (args.structure !== false) {
+    for (const room of remote.rooms) {
+      if (!(await fs.exists(room))) {
+        add('room', 'broken', room, 'Required folder is missing.', 'Create it. The scaffold and its plugins write here and will fail without it.');
+      }
     }
   }
 
   /* 3. agent identities (before the files, because a shipped agent found by
      its id under another name must not be reported missing below) */
-  const foundElsewhere = await checkAgents({ fs, remote, add });
+  const foundElsewhere = args.agents === false ? new Set() : await checkAgents({ fs, remote, add, metaDir, product });
 
   /* 4. canonical files: three-way */
-  const localHashes = new Map((local && local.files || []).map((f) => [f.path, f.sha256]));
-  for (const f of remote.files || []) {
-    const fk = { fileKind: f.kind || 'file' };
+  const localHashes = new Map();
+  if (local) for (const f of local.files.values()) localHashes.set(f.path, f.sha256);
+  for (const f of remote.files.values()) {
+    const fk = { fileKind: f.kind };
     if (isMachineState(f.path)) continue; /* state, never drift (GL-1008) */
+    if (isDescriptor(f.path)) continue; /* the version gap already says it */
+    if (metaNotInstalled && f.path.startsWith(metaDir + '/')) continue;
+    const dotTop = await absentDotTop(f.path);
+    if (dotTop) { folded.count++; folded.tops.add(dotTop); continue; }
     const exists = await fs.exists(f.path);
     if (!exists) {
       if (f.example) continue; /* example notes are meant to be deleted */
       if (foundElsewhere.has(f.path)) continue; /* the agent lives under the member's own name */
+      if (f.seed) {
+        add('file', 'attention', f.path, 'Canonical ' + f.kind + ' is missing. It is a starting file: it becomes yours after the first install.',
+          'Add it: copy it in from the latest ' + product + ' once. After that it is yours to change, and this check never compares it again.', fk);
+        continue;
+      }
       if (isHarnessPath(f.path)) {
         add('generated', 'attention', f.path, 'Generated harness file is missing, so the host that reads it reads nothing.', GEN_FIX, fk);
         continue;
       }
-      add('file', 'attention', f.path, 'Canonical ' + f.kind + ' is missing.', 'Copy it in from the latest scaffold.', fk);
+      add('file', 'attention', f.path, 'Canonical ' + f.kind + ' is missing.', 'Copy it in from the latest ' + product + '.', fk);
       continue;
     }
+    /* The updater (`mypka-update.py`) never overwrites an edited file: it
+       writes the new version beside it as `<file>.update`. One left there is
+       a merge nobody has done yet. */
+    let pending = false;
+    try { pending = !!(await fs.exists(f.path + '.update')); } catch (e) { pending = false; }
+    if (pending) {
+      add('update', 'attention', f.path + '.update',
+        'An update is waiting for your merge: the updater left the new version of `' + f.path + '` beside your edited copy.',
+        'Compare the two, keep what you want in `' + f.path + '`, then delete the `.update` file. Nothing reads it.', fk);
+    }
+    /* A seed ships once and is the member's from then on (`.obsidian/
+       workspace.json`, `.mcp.json`): it differs on every vault by design. */
+    if (f.seed) continue;
     let have;
     try { have = await hash(await fs.readBinary(f.path)); } catch (e) { have = null; }
     if (have === f.sha256) continue;
@@ -563,26 +847,81 @@ async function runChecks({ fs, hash, remote, local, installedVersion, configDir 
       continue;
     }
     const installedHash = localHashes.get(f.path);
+    const older = remote.previous && Array.isArray(remote.previous[f.path]) ? remote.previous[f.path] : [];
     if (installedHash && have === installedHash) {
       add('file', 'attention', f.path, 'Changed upstream since you installed; your copy is the version you started with.',
-        'Update it from the latest scaffold. Safe: you never edited it.', fk);
+        'Update it from the latest ' + product + '. Safe: you never edited it.', fk);
     } else if (installedHash && installedHash !== f.sha256) {
       add('file', 'info', f.path, 'You edited this file, and it also changed upstream.',
-        'Keep yours. Compare against the latest scaffold by hand if you want the upstream change too. This check never overwrites an edited file.', fk);
+        'Keep yours. Compare against the latest ' + product + ' by hand if you want the upstream change too. This check never overwrites an edited file.', fk);
     } else if (installedHash) {
       add('file', 'info', f.path, 'You edited this file.', 'Keep it. It is yours now.', fk);
+    } else if (remote.previous) {
+      /* No installed manifest, but the release lists every older byte-state
+         of each path: the same evidence `mypka-update.py` uses, so the two
+         give the same answer about the same file. */
+      if (have !== null && older.includes(have)) {
+        add('file', 'attention', f.path, 'An older shipped version: you never edited it.',
+          'Update it from the latest ' + product + '. Safe: your copy is bytes a release shipped.', fk);
+      } else {
+        add('file', 'info', f.path, 'You edited this file.', 'Keep it. It is yours now.', fk);
+      }
     } else {
-      add('file', 'info', f.path, 'Differs from the latest scaffold, and without your installed manifest the check cannot tell whether you changed it or the scaffold did.',
-        'Compare by hand, or add `.icor-for-life/manifest.json` from the version you installed so the next check can tell.', fk);
+      add('file', 'info', f.path, 'Differs from the latest ' + product + ', and without your installed manifest the check cannot tell whether you changed it or the ' + product + ' did.',
+        'Compare by hand, or add `' + metaDir + '/manifest.json` from the version you installed so the next check can tell.', fk);
     }
+  }
+
+  /* The Sync line: one per product, never one per file. */
+  if (folded.count || folded.tops.size) {
+    const tops = [...folded.tops].map((t) => '`' + t + '`').join(', ');
+    add('sync', 'info', metaDir,
+      (folded.count ? folded.count + ' shipped file' + (folded.count === 1 ? '' : 's') + ' live' + (folded.count === 1 ? 's' : '') + ' in dot folders this device does not have (' + tops + ')' : 'The version folder `' + metaDir + '/` is not on this device')
+        + (metaAbsent && folded.count ? ', the version folder `' + metaDir + '/` among them' : '')
+        + '. Obsidian Sync does not carry dot folders, so these checks run unverified here.',
+      'Run the check on the device you installed on. Nothing is missing because of this.');
   }
 
   /* 5. leftovers: removed or moved upstream after your version, still here.
      Matched by CONTENT when the manifest knows the old file's hash: a file
      that shares the old name but not the old bytes is the user's own, and
-     is reported as a name collision, never as a leftover. */
+     is reported as a name collision, never as a leftover.
+
+     THE SPLIT (0.7.0). At 2.0.0 the ICOR for Life builder writes every team
+     file it no longer ships into its history as removed, with the old
+     hashes. A member's untouched team files match those hashes exactly, so
+     without this partition the check would tell them to delete AGENTS.md
+     and every agent. A path the OTHER product ships is a MOVE: no finding
+     here, the other product's section judges it. Only a path in neither
+     manifest is a leftover. If the other manifest could not be read, a
+     removal at or after the split is not judged at all unless its own
+     entry says where it went, and one line says why. */
+  const moved = new Set();
+  const other = args.otherRemote ? normalizeOrNull(args.otherRemote) : null;
+  if (other) {
+    for (const p of other.files.keys()) moved.add(p);
+    for (const a of other.agents || []) {
+      if (a && typeof a.path === 'string') moved.add(a.path);
+      if (a && typeof a.shim === 'string') moved.add(a.shim);
+    }
+  }
+  const otherUnknown = args.otherRemote === null || (args.otherRemote !== undefined && !other);
+  const splitAt = args.splitVersion || null;
+  const unjudged = [];
+  if (repo === 'mypka' && !remote.historyPresent) {
+    add('leftover', 'info', metaDir + '/manifest.json',
+      'Leftover check: not available for myPKA ' + (latest || '') + '. Its manifest carries no history yet, so a file myPKA removes later cannot be recognised here.',
+      'Nothing to do. A later myPKA manifest carries its history, and this check then names any file it removed.');
+  }
   for (const r of removalsSince(remote, installed)) {
     if (isMachineState(r.path)) continue; /* state, never a leftover (GL-1008) */
+    if (remote.files.has(r.path)) continue; /* shipped again: the file check judges it */
+    if (r.movedTo) continue; /* the entry itself says it moved */
+    if (moved.has(r.path)) continue; /* the other product ships it: a move */
+    if (otherUnknown && splitAt && compareCore(r.version, splitAt) >= 0) {
+      if (await fs.exists(r.path)) unjudged.push(r.path);
+      continue;
+    }
     if (!(await fs.exists(r.path))) continue;
     let same = true;
     if (r.sha256) {
@@ -592,66 +931,75 @@ async function runChecks({ fs, hash, remote, local, installedVersion, configDir 
     }
     if (same) {
       add('leftover', 'attention', r.path,
-        'Removed from the scaffold in ' + r.version + (r.note ? ': ' + r.note : '.'),
-        'Delete it after reading the ' + r.version + ' changelog entry. Nothing in the scaffold reads it any more.', { since: r.version });
+        'Removed from the ' + product + ' in ' + r.version + (r.note ? ': ' + r.note : '.'),
+        'Delete it after reading the ' + r.version + ' changelog entry. Nothing in the ' + product + ' reads it any more.', { since: r.version });
     } else {
       add('collision', 'info', r.path,
-        'Shares its name with a scaffold file that was ' + (r.to ? 'renamed to `' + r.to + '`' : 'removed') + ' in ' + r.version + ', but not its content, so it is yours.',
-        'Keep it. Nothing to do' + (r.to ? '; the scaffold\'s own document now lives at `' + r.to + '`.' : '.'), { since: r.version });
+        'Shares its name with a ' + product + ' file that was ' + (r.to ? 'renamed to `' + r.to + '`' : 'removed') + ' in ' + r.version + ', but not its content, so it is yours.',
+        'Keep it. Nothing to do' + (r.to ? '; the ' + product + '\'s own document now lives at `' + r.to + '`.' : '.'), { since: r.version });
     }
   }
+  if (unjudged.length) {
+    add('leftover', 'info', metaDir + '/manifest.json',
+      unjudged.length + ' file' + (unjudged.length === 1 ? '' : 's') + ' the ' + product + ' stopped shipping in ' + splitAt + ' or later ' + (unjudged.length === 1 ? 'is' : 'are') + ' still here and ' + (unjudged.length === 1 ? 'was' : 'were') + ' not judged. At ' + splitAt + ' the AI team moved to myPKA, and without the myPKA manifest this check cannot tell a file that moved from one that was removed.',
+      'Delete nothing on this evidence. Set the latest myPKA manifest URL in the settings, and the next check judges each one: moved files in the myPKA section, the rest as leftovers.');
+  }
 
-  /* 6. bases: every Base in the vault points at a folder that exists */
-  for (const p of await fs.listBases()) {
-    let txt = '';
-    try { txt = await fs.read(p); } catch (e) { continue; }
-    for (const folder of baseFolders(txt)) {
-      if (!(await fs.exists(folder))) {
-        add('base', 'broken', p, 'Filters on `' + folder + '`, which does not exist, so the Base lists nothing.',
-          'Repoint the filter at the folder that replaced it, or delete the Base.');
+  if (args.structure !== false) {
+    /* 6. bases: every Base in the vault points at a folder that exists */
+    for (const p of await fs.listBases()) {
+      let txt = '';
+      try { txt = await fs.read(p); } catch (e) { continue; }
+      for (const folder of baseFolders(txt)) {
+        if (!(await fs.exists(folder))) {
+          add('base', 'broken', p, 'Filters on `' + folder + '`, which does not exist, so the Base lists nothing.',
+            'Repoint the filter at the folder that replaced it, or delete the Base.');
+        }
       }
     }
-  }
 
-  /* 7. plugins the vault expects */
-  let enabled = [];
-  try { enabled = JSON.parse(await fs.read(cfg + '/community-plugins.json')); } catch (e) { enabled = []; }
-  for (const id of remote.plugins || []) {
-    const installed = await fs.exists(cfg + '/plugins/' + id + '/manifest.json');
-    if (!installed) add('plugin', 'attention', cfg + '/plugins/' + id, 'Plugin is not installed.', 'Install it from the latest scaffold or the community list; the vault is built to have it.');
-    else if (!enabled.includes(id)) add('plugin', 'attention', cfg + '/plugins/' + id, 'Plugin is installed but not enabled.', 'Enable it under Settings, Community plugins.');
-  }
-
-  /* 8. snippets enabled but gone (the reverse of a leftover) */
-  let appearance = {};
-  try { appearance = JSON.parse(await fs.read(cfg + '/appearance.json')); } catch (e) { appearance = {}; }
-  for (const s of appearance.enabledCssSnippets || []) {
-    if (!(await fs.exists(cfg + '/snippets/' + s + '.css'))) {
-      add('snippet', 'attention', cfg + '/snippets/' + s + '.css', 'Enabled in appearance.json but the file is gone.',
-        'Disable it under Settings, Appearance, CSS snippets. The scaffold no longer ships it.');
+    /* 7. plugins the vault expects */
+    let enabled = [];
+    try { enabled = JSON.parse(await fs.read(cfg + '/community-plugins.json')); } catch (e) { enabled = []; }
+    if (!Array.isArray(enabled)) enabled = [];
+    for (const id of remote.plugins) {
+      const there = await fs.exists(cfg + '/plugins/' + id + '/manifest.json');
+      if (!there) add('plugin', 'attention', cfg + '/plugins/' + id, 'Plugin is not installed.', 'Install it from the latest scaffold or the community list; the vault is built to have it.');
+      else if (!enabled.includes(id)) add('plugin', 'attention', cfg + '/plugins/' + id, 'Plugin is installed but not enabled.', 'Enable it under Settings, Community plugins.');
     }
-  }
-  if (Array.isArray(remote.snippets) && remote.snippets.length === 0 && (appearance.enabledCssSnippets || []).length) {
-    add('snippet', 'info', cfg + '/appearance.json', 'The latest scaffold enables no CSS snippets; this vault enables ' + appearance.enabledCssSnippets.length + '.',
-      'If they are the scaffold\'s old snippets, disable them; their rules live in the theme now.');
-  }
 
-  /* 9. the Daily Scratchpad keeps its shape: YYYY/MM/ nesting and one of the
-     three legal names (GL-1004). Reported once per file, because the fix is
-     per file and a single "the room is untidy" line tells you nothing about
-     which one to move. */
-  for (const path of await fs.listScratchpads()) {
-    const problem = scratchpadProblem(path);
-    if (!problem) continue;
-    if (problem === 'nesting-base') {
-      add('scratchpad', 'attention', path, 'A saved view belongs at the root of `' + SCRATCHPAD_ROOT + '`, not inside a dated folder.',
-        'Move it to `' + SCRATCHPAD_ROOT + '/`. It is a view of the whole room, not of one month.');
-    } else if (problem === 'nesting') {
-      add('scratchpad', 'attention', path, 'Sits outside `YYYY/MM/`. The Daily Scratchpad is date-nested like the Journal (GL-1004).',
-        'Move it into `' + SCRATCHPAD_ROOT + '/<year>/<month>/` for its own date. Check that Settings, Daily notes uses `YYYY/MM/YYYY-MM-DD` and that the Scratchpad plugin uses `YYYY/MM`, or the next note lands loose again.');
-    } else {
-      add('scratchpad', 'attention', path, 'Is named for its subject rather than its date, so it is a note that has ended up in the capture room.',
-        'A note with a subject belongs in `04 Inner World/Notes/`; a person, company or life entity belongs in `04 Inner World/`. Obsidian creates these by clicking a `[[wikilink]]` that has no note behind it, so also check Settings, Files and links, Default location for new notes.');
+    /* 8. snippets enabled but gone (the reverse of a leftover) */
+    let appearance = {};
+    try { appearance = JSON.parse(await fs.read(cfg + '/appearance.json')); } catch (e) { appearance = {}; }
+    const enabledSnippets = appearance && Array.isArray(appearance.enabledCssSnippets) ? appearance.enabledCssSnippets : [];
+    for (const s of enabledSnippets) {
+      if (!(await fs.exists(cfg + '/snippets/' + s + '.css'))) {
+        add('snippet', 'attention', cfg + '/snippets/' + s + '.css', 'Enabled in appearance.json but the file is gone.',
+          'Disable it under Settings, Appearance, CSS snippets. The scaffold no longer ships it.');
+      }
+    }
+    if (Array.isArray(remote.snippets) && remote.snippets.length === 0 && enabledSnippets.length) {
+      add('snippet', 'info', cfg + '/appearance.json', 'The latest scaffold enables no CSS snippets; this vault enables ' + enabledSnippets.length + '.',
+        'If they are the scaffold\'s old snippets, disable them; their rules live in the theme now.');
+    }
+
+    /* 9. the Daily Scratchpad keeps its shape: YYYY/MM/ nesting and one of the
+       three legal names (GL-1004). Reported once per file, because the fix is
+       per file and a single "the room is untidy" line tells you nothing about
+       which one to move. */
+    for (const path of await fs.listScratchpads()) {
+      const problem = scratchpadProblem(path);
+      if (!problem) continue;
+      if (problem === 'nesting-base') {
+        add('scratchpad', 'attention', path, 'A saved view belongs at the root of `' + SCRATCHPAD_ROOT + '`, not inside a dated folder.',
+          'Move it to `' + SCRATCHPAD_ROOT + '/`. It is a view of the whole room, not of one month.');
+      } else if (problem === 'nesting') {
+        add('scratchpad', 'attention', path, 'Sits outside `YYYY/MM/`. The Daily Scratchpad is date-nested like the Journal (GL-1004).',
+          'Move it into `' + SCRATCHPAD_ROOT + '/<year>/<month>/` for its own date. Check that Settings, Daily notes uses `YYYY/MM/YYYY-MM-DD` and that the Scratchpad plugin uses `YYYY/MM`, or the next note lands loose again.');
+      } else {
+        add('scratchpad', 'attention', path, 'Is named for its subject rather than its date, so it is a note that has ended up in the capture room.',
+          'A note with a subject belongs in `04 Inner World/Notes/`; a person, company or life entity belongs in `04 Inner World/`. Obsidian creates these by clicking a `[[wikilink]]` that has no note behind it, so also check Settings, Files and links, Default location for new notes.');
+      }
     }
   }
 
@@ -669,44 +1017,240 @@ async function runChecks({ fs, hash, remote, local, installedVersion, configDir 
      is the skill behind the link rather than the link. Where the adapter
      cannot list the folder at all the check says so and claims nothing:
      a platform that cannot look is not a vault that is broken. */
-  const skillNames = typeof fs.listSkillNames === 'function' ? await fs.listSkillNames() : [];
-  const links = typeof fs.hostSkillLinks === 'function'
-    ? await fs.hostSkillLinks(skillNames)
-    : { supported: false, present: false, entries: [] };
-  if (!links.supported) {
-    add('harness-link', 'info', HOST_LINKS_DIR,
-      'Not checked on this device: Codex, Gemini CLI and Cursor do not run here.',
-      'Nothing to do. These links exist for the hosts that read them, and none of them runs on a phone or tablet.');
-  } else if (links.present) {
-    /* The listing failing is itself the finding, not a reason to stay quiet.
-       On desktop the adapter stats every entry it lists and a link with no
-       target ends the whole call, so the one input this check exists to
-       catch is the input that makes the listing fail. Reporting that as
-       "could not look" would be a guard whose green is reachable without
-       the thing being true. */
-    if (links.listable === false) {
-      add('harness-link', 'attention', HOST_LINKS_DIR,
-        'The folder is here and could not be listed. On a desktop vault that means at least one link in it points at nothing: listing stats every entry, and an entry with no target ends the listing.',
-        LINK_FIX);
-    }
-    for (const e of links.entries || []) {
-      if (e.resolves) continue;
-      if (e.known) {
-        add('harness-link', 'attention', HOST_LINKS_DIR + '/' + e.name,
-          'Skill `' + e.name + '` cannot be reached through `' + HOST_LINKS_DIR + '`, so only Claude Code can see it. Either there is no link, or the link points at nothing.',
+  if (args.hostLinks !== false) {
+    const skillNames = typeof fs.listSkillNames === 'function' ? await fs.listSkillNames() : [];
+    const links = typeof fs.hostSkillLinks === 'function'
+      ? await fs.hostSkillLinks(skillNames)
+      : { supported: false, present: false, entries: [] };
+    if (!links.supported) {
+      add('harness-link', 'info', HOST_LINKS_DIR,
+        'Not checked on this device: Codex, Gemini CLI and Cursor do not run here.',
+        'Nothing to do. These links exist for the hosts that read them, and none of them runs on a phone or tablet.');
+    } else if (links.present) {
+      /* The listing failing is itself the finding, not a reason to stay quiet.
+         On desktop the adapter stats every entry it lists and a link with no
+         target ends the whole call, so the one input this check exists to
+         catch is the input that makes the listing fail. Reporting that as
+         "could not look" would be a guard whose green is reachable without
+         the thing being true. */
+      if (links.listable === false) {
+        add('harness-link', 'attention', HOST_LINKS_DIR,
+          'The folder is here and could not be listed. On a desktop vault that means at least one link in it points at nothing: listing stats every entry, and an entry with no target ends the listing.',
           LINK_FIX);
-      } else {
-        add('harness-link', 'attention', HOST_LINKS_DIR + '/' + e.name,
-          'Points into `' + SKILLS_DIR + '` at something that is not there, so Codex, Gemini CLI and Cursor read nothing for it and report no error.',
-          LINK_FIX);
+      }
+      for (const e of links.entries || []) {
+        if (e.resolves) continue;
+        if (e.known) {
+          add('harness-link', 'attention', HOST_LINKS_DIR + '/' + e.name,
+            'Skill `' + e.name + '` cannot be reached through `' + HOST_LINKS_DIR + '`, so only Claude Code can see it. Either there is no link, or the link points at nothing.',
+            LINK_FIX);
+        } else {
+          add('harness-link', 'attention', HOST_LINKS_DIR + '/' + e.name,
+            'Points into `' + SKILLS_DIR + '` at something that is not there, so Codex, Gemini CLI and Cursor read nothing for it and report no error.',
+            LINK_FIX);
+        }
       }
     }
   }
 
+  const counts = countFindings(findings);
+  const health = counts.broken ? 'broken' : counts.attention ? 'attention' : 'ok';
+  return { repo, health, installedVersion: installed, latestVersion: latest, findings, counts };
+}
+
+function countFindings(findings) {
   const counts = { broken: 0, attention: 0, info: 0 };
   for (const f of findings) counts[f.severity]++;
-  const health = counts.broken ? 'broken' : counts.attention ? 'attention' : 'ok';
-  return { health, installedVersion: installed, latestVersion: latest, findings, counts };
+  return counts;
+}
+
+/* ------------------------------------------------------ the suite (0.7.0) - */
+/*
+ * Which half of the split is in this vault. The markers are GL-1013 §6's,
+ * never a third rule:
+ *   team      `AGENTS.md` and `06 AI Team/Agents/` (neither is a dot path,
+ *             so both survive Obsidian Sync)
+ *   icor      `.icor-for-life/manifest.json`, or the four content rooms
+ *   mypkaDir  `.mypka/manifest.json`
+ *   preSplit  team and icor, no `.mypka/`, and an ICOR version below 2.0.0
+ *
+ * Mode B (team in its own folder) and "no team at all" look the same from a
+ * content vault, and this check does not pretend it can tell them apart:
+ * `sources.yaml` lives in the team root, not here.
+ */
+async function detectMode(fs, icorInstalled) {
+  const ex = async (p) => { try { return !!(await fs.exists(p)); } catch (e) { return false; } };
+  const team = (await ex('AGENTS.md')) && (await ex(AGENTS_DIR));
+  let rooms = true;
+  for (const r of CONTENT_ROOMS) if (!(await ex(r))) { rooms = false; break; }
+  const icor = (await ex(META_DIR + '/manifest.json')) || rooms;
+  const mypkaDir = await ex(MYPKA_DIR + '/manifest.json');
+  const preSplit = team && icor && !mypkaDir && compareVersions(icorInstalled, SPLIT_VERSION) === -1;
+  const name = team ? (icor ? 'A' : 'B-team') : (icor ? 'B-content' : 'none');
+  return { name, team, icor, mypkaDir, preSplit };
+}
+
+const MODE_TEXT = {
+  A: 'content and team in one vault (mode A)',
+  'B-team': 'myPKA team folder opened as a vault (mode B, team side)',
+  'B-content': 'content vault (mode B, or no team)',
+  none: 'not an ICOR for Life or myPKA vault',
+};
+
+/* A version folder's two files, through the engine's fs: { version,
+   manifest } with null for anything absent or unreadable. Never throws. */
+async function readLocalPair(fs, dir) {
+  let version = null, manifest = null;
+  try { if (await fs.exists(dir + '/VERSION')) version = String(await fs.read(dir + '/VERSION')).trim() || null; } catch (e) { version = null; }
+  try { if (await fs.exists(dir + '/manifest.json')) manifest = JSON.parse(await fs.read(dir + '/manifest.json')); } catch (e) { manifest = null; }
+  return { version, manifest };
+}
+async function readLocalPairs(fs) {
+  return { icor: await readLocalPair(fs, META_DIR), mypka: await readLocalPair(fs, MYPKA_DIR) };
+}
+
+/* The team's words for "the team is not here", used in the report, the
+   dashboard and the harness block alike. */
+const TEAM_ELSEWHERE = 'The myPKA team is not in this vault. In mode B it lives in its own folder and is checked there. Nothing is missing here.';
+const CONTENT_ELSEWHERE = 'ICOR for Life is not in this folder: this is the myPKA team opened as a vault. The content lives elsewhere and is checked there.';
+
+/* ok < offline < attention < broken: a product that could not be fetched
+   is worse than a clean one and never better than something to do. */
+const HEALTH_RANK = { ok: 0, offline: 1, attention: 2, broken: 3 };
+
+/*
+ * runSuite({ fs, hash, configDir, local?, icorRemote, icorError,
+ *            mypkaRemote, mypkaError, mypkaUrlSet })
+ *
+ * Both products in one pass (0.7.0). Remotes are the parsed latest
+ * manifests, either shape; an error is the sentence for why one could not
+ * be fetched. `mypkaUrlSet` false means nobody has told this plugin where
+ * myPKA is published, which is "not checked", never "offline": the plugin
+ * never guesses a URL. `local` is readLocalPairs(fs), read here when absent.
+ *
+ * Returns { suite: true, mode, sections: { icor, mypka }, findings, counts,
+ * health, installedVersion, latestVersion, mypkaInstalledVersion,
+ * mypkaLatestVersion }. Every finding carries `repo`: 'icor', 'mypka', or
+ * 'pair' for what is about the two together. A section: { status, title,
+ * installedVersion, latestVersion } where status is a health, 'offline',
+ * 'not-checked' or 'elsewhere'.
+ */
+async function runSuite(args) {
+  const { fs, hash, configDir } = args;
+  const local = args.local || await readLocalPairs(fs);
+  const icorLocal = normalizeOrNull(local.icor.manifest);
+  const mypkaLocal = normalizeOrNull(local.mypka.manifest);
+  const icorInstalled = local.icor.version || (icorLocal && icorLocal.version) || null;
+  const mypkaInstalled = local.mypka.version || (mypkaLocal && mypkaLocal.version) || null;
+  const mode = await detectMode(fs, icorInstalled);
+
+  let icorRemote = null, icorError = args.icorError || '';
+  let mypkaRemote = null, mypkaError = args.mypkaError || '';
+  if (args.icorRemote && !icorError) { try { icorRemote = normalizeManifest(args.icorRemote); } catch (e) { icorError = e.message; } }
+  if (args.mypkaRemote && !mypkaError) { try { mypkaRemote = normalizeManifest(args.mypkaRemote); } catch (e) { mypkaError = e.message; } }
+  const mypkaUrlSet = args.mypkaUrlSet !== false;
+
+  const findings = [];
+  const note = (repo, kind, path, message, action) => findings.push({ kind, severity: 'info', path, message, action, repo });
+  const sections = {
+    icor: { status: 'not-checked', title: 'ICOR for Life (content)', installedVersion: icorInstalled, latestVersion: icorRemote ? icorRemote.version : null },
+    mypka: { status: 'not-checked', title: 'myPKA (team)', installedVersion: mypkaInstalled, latestVersion: mypkaRemote ? mypkaRemote.version : null },
+  };
+
+  if (mode.name === 'none') {
+    note('pair', 'mode', '/', 'This folder carries neither ICOR for Life (no `.icor-for-life/` and not the four content rooms) nor the myPKA team (no `AGENTS.md` with `06 AI Team/Agents/`).',
+      'Nothing to check here. Open the vault you installed ICOR for Life or myPKA into.');
+  } else {
+    /* ---- ICOR for Life ---- */
+    if (!mode.icor) {
+      sections.icor.status = 'elsewhere';
+      note('icor', 'mode', META_DIR, CONTENT_ELSEWHERE, 'Nothing to do here. Run the check in your content vault to see the ICOR for Life side.');
+    } else if (!icorRemote) {
+      sections.icor.status = 'offline';
+      note('icor', 'offline', META_DIR + '/manifest.json', 'Not checked: the latest ICOR for Life manifest could not be read' + (icorError ? ' (' + icorError + ')' : '') + '.',
+        'Check the manifest URL and the token in the settings, then run the check again.');
+    } else {
+      const r = await runChecks({
+        fs, hash, configDir, remote: icorRemote, local: local.icor.manifest, installedVersion: icorInstalled,
+        repo: 'icor', metaDir: META_DIR, product: 'ICOR for Life Scaffold',
+        agents: false, hostLinks: false, structure: true, syncFold: true,
+        otherRemote: mypkaRemote || null, splitVersion: SPLIT_VERSION,
+      });
+      sections.icor.status = r.health;
+      for (const f of r.findings) findings.push(f);
+    }
+
+    /* ---- myPKA ---- */
+    if (!mode.team) {
+      sections.mypka.status = 'elsewhere';
+      note('mypka', 'mode', 'AGENTS.md', TEAM_ELSEWHERE, 'Nothing to do. Run the check in the team folder, or open it as its own vault, to see the team side.');
+    } else if (!mypkaUrlSet) {
+      note('mypka', 'offline', MYPKA_DIR + '/manifest.json', 'Not checked: no myPKA manifest URL is set.',
+        'Set "Latest myPKA manifest URL" in the settings once myPKA is published. This plugin never guesses one.');
+    } else if (!mypkaRemote) {
+      sections.mypka.status = 'offline';
+      note('mypka', 'offline', MYPKA_DIR + '/manifest.json', 'Not checked: the latest myPKA manifest could not be read' + (mypkaError ? ' (' + mypkaError + ')' : '') + '.',
+        'Check the myPKA manifest URL in the settings, then run the check again. The ICOR for Life result above does not depend on it.');
+    } else {
+      if (mode.preSplit) {
+        note('mypka', 'mode', MYPKA_DIR, 'Installed before the split (ICOR for Life Scaffold ' + icorInstalled + '). The AI team half is now myPKA: this section compares your team files against the latest myPKA, using your ICOR for Life manifest as the record of what you installed.',
+          'Nothing is wrong. When you update, install myPKA\'s version folder `.mypka/` with the team files; the check then reads its own manifest.');
+      }
+      const r = await runChecks({
+        fs, hash, configDir, remote: mypkaRemote,
+        /* Before the split the team files were ICOR for Life files, so the
+           old ICOR manifest is the honest record of what was installed. */
+        local: local.mypka.manifest || (mode.preSplit ? local.icor.manifest : null),
+        installedVersion: mypkaInstalled,
+        repo: 'mypka', metaDir: MYPKA_DIR, product: 'myPKA',
+        /* Before the split there is no `.mypka/` on ANY device, so its
+           absence is not Obsidian Sync: no Sync line, and its own files are
+           covered by the pre-split line above. */
+        agents: true, hostLinks: true, structure: false, syncFold: !mode.preSplit,
+        otherRemote: icorRemote || null, splitVersion: null,
+        quietMissingVersion: mode.preSplit, metaNotInstalled: mode.preSplit, localVersion: !mode.preSplit,
+      });
+      sections.mypka.status = r.health;
+      for (const f of r.findings) findings.push(f);
+    }
+
+    /* ---- the two together (mode A) ---- */
+    if (mode.name === 'A') {
+      const req = mypkaLocal ? parseRequires(mypkaLocal.requires) : null;
+      const impl = icorLocal ? parseImplements(icorLocal.implements) : null;
+      if (req && impl !== null) {
+        if (impl < req.lo || impl >= req.hi) {
+          findings.push({ kind: 'compat', severity: 'broken', path: META_DIR + '/manifest.json', repo: 'pair',
+            message: 'The installed pair does not fit: ICOR for Life implements `icor-concepts/' + impl + '`, and myPKA requires `' + mypkaLocal.requires + '`. Session start will refuse (E_SCHEMA_MISMATCH).',
+            action: 'Update the side that is behind so the two agree. The team\'s session start is the only thing that refuses; this check only reports it.' });
+        }
+      } else if (mode.mypkaDir && local.icor.manifest && !mode.preSplit) {
+        note('pair', 'compat', MYPKA_DIR + '/manifest.json', 'Compatibility of the installed pair not verified: the `requires` in `' + MYPKA_DIR + '/manifest.json` or the `implements` in `' + META_DIR + '/manifest.json` is missing or not in the form this check reads.',
+          'Nothing to do. The team\'s session start checks the pair itself.');
+      }
+      const latestImpl = icorRemote ? parseImplements(icorRemote.implements) : null;
+      if (req && latestImpl !== null && (latestImpl < req.lo || latestImpl >= req.hi)) {
+        findings.push({ kind: 'compat', severity: 'attention', path: MYPKA_DIR + '/manifest.json', repo: 'pair',
+          message: 'The latest ICOR for Life implements `icor-concepts/' + latestImpl + '`, outside what your myPKA requires (`' + mypkaLocal.requires + '`).',
+          action: 'Update myPKA before ICOR for Life, or the team\'s session start refuses the new content.' });
+      }
+    }
+    /* Two products, one path: an upstream defect (T8). Reported, never judged. */
+    if (icorRemote && mypkaRemote) {
+      for (const p of icorRemote.files.keys()) {
+        if (mypkaRemote.files.has(p)) note('pair', 'disjoint', p, 'Both ICOR for Life and myPKA ship this path, which the split says never happens.', 'Nothing to do on your side. Report it to support@myicor.com; the two releases have to agree on one owner.');
+      }
+    }
+  }
+
+  const counts = countFindings(findings);
+  let health = counts.broken ? 'broken' : counts.attention ? 'attention' : 'ok';
+  for (const s of [sections.icor, sections.mypka]) if (s.status === 'offline' && HEALTH_RANK.offline > HEALTH_RANK[health]) health = 'offline';
+  return {
+    suite: true, mode, sections, findings, counts, health,
+    installedVersion: icorInstalled, latestVersion: sections.icor.latestVersion,
+    mypkaInstalledVersion: mypkaInstalled, mypkaLatestVersion: sections.mypka.latestVersion,
+  };
 }
 
 /* ---------------------------------------------- knowledge quality ---- */
@@ -917,7 +1461,12 @@ function renderQuality(q) {
  * anything that is not JSON, is refused with one sentence and never
  * thrown.
  */
-const HARNESS_PATH = META_DIR + '/scripts/harness.json';
+/* Since the split (0.7.0) the harness is TEAM state and lives with the team:
+   `scaffold-init.py` writes `.mypka/state/harness.json` (j5d). The old
+   location is read second, labelled, so a vault whose generator has not run
+   since the move still shows its hosts. */
+const HARNESS_PATH = MYPKA_DIR + '/state/harness.json';
+const HARNESS_PATH_OLD = META_DIR + '/scripts/harness.json';
 const HARNESS_SCHEMA = 1;
 const HARNESS_HOST_ORDER = ['claude-code', 'codex', 'gemini', 'cursor'];
 const HARNESS_HOST_LABELS = { 'claude-code': 'Claude Code', codex: 'Codex', gemini: 'Gemini CLI', cursor: 'Cursor' };
@@ -929,11 +1478,16 @@ const HARNESS_TESTED_TEXT = { ok: 'green', red: 'RED', absent: 'no suite here', 
    its own under it, because a sentence a member has to act on does not belong
    in a cell that scrolls sideways. */
 const HARNESS_TRUSTED_TEXT = { yes: 'yes', no: 'NOT TRUSTED', unknown: 'unknown' };
-const HARNESS_TEXT = { ok: 'Harness ok', attention: 'Harness: attention', unknown: 'Harness: no data' };
-const NO_HARNESS_DATA = 'No harness data exists yet: run `python3 "' + GEN_SCRIPT + '" doctor --json` (ICOR for Life Scaffold 1.23.0 or later) in the ICOR for Life Terminal, and the next Scaffold Check will show which AI hosts this vault is wired to.';
+const HARNESS_TEXT = { ok: 'Harness ok', attention: 'Harness: attention', unknown: 'Harness: no data', elsewhere: 'Harness: team elsewhere' };
+const NO_HARNESS_DATA = 'No harness data exists yet: run `python3 "' + GEN_SCRIPT + '" doctor --json` (ICOR for Life Scaffold 1.23.0 or later) in the ICOR for Life Terminal, and the next Scaffold Check will show which AI hosts this vault is wired to. It writes `' + HARNESS_PATH + '`.';
+
+/* In a content vault the generator is not here to run: the team, and its
+   harness, live in their own folder (mode B). Said as a fact, never as a
+   missing file. */
+const HARNESS_ELSEWHERE = 'The myPKA team lives elsewhere, so its harness is not read here. Run the check in the team folder to see which AI hosts the team is wired to.';
 
 function noHarness(status, message) {
-  return { status, message, health: 'unknown', generated: null, scaffoldVersion: null, skills: null, files: null, tests: null, problems: [], notes: [], hosts: [] };
+  return { status, message, health: 'unknown', generated: null, scaffoldVersion: null, mypkaVersion: null, path: null, oldLocation: false, skills: null, files: null, tests: null, problems: [], notes: [], hosts: [] };
 }
 
 const asList = (v) => (Array.isArray(v) ? v.map(asText).map((s) => s.trim()).filter(Boolean) : []);
@@ -949,15 +1503,16 @@ const asList = (v) => (Array.isArray(v) ? v.map(asText).map((s) => s.trim()).fil
  * a row whose first column is a guess is worse than no row.
  * Never throws.
  */
-function parseHarness(text) {
+function parseHarness(text, opts) {
+  const at = (opts && opts.path) || HARNESS_PATH;
   if (text == null) return noHarness('missing', NO_HARNESS_DATA);
-  const badJson = '`' + HARNESS_PATH + '` is not valid JSON, so the harness is not shown; run `scaffold-init.py doctor --json` again to rewrite it.';
+  const badJson = '`' + at + '` is not valid JSON, so the harness is not shown; run `scaffold-init.py doctor --json` again to rewrite it.';
   let raw;
   try { raw = JSON.parse(String(text)); } catch { return noHarness('invalid', badJson); }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return noHarness('invalid', badJson);
   if (raw.schema !== HARNESS_SCHEMA) {
     const seen = raw.schema === undefined ? 'no schema' : 'schema ' + JSON.stringify(raw.schema);
-    return noHarness('wrong-schema', '`' + HARNESS_PATH + '` carries ' + seen + ' and this plugin reads schema ' + HARNESS_SCHEMA + ', so the harness is not shown; update the plugin or the scaffold so the two agree.');
+    return noHarness('wrong-schema', '`' + at + '` carries ' + seen + ' and this plugin reads schema ' + HARNESS_SCHEMA + ', so the harness is not shown; update the plugin or the scaffold so the two agree.');
   }
   const num = (o, k) => (o && typeof o === 'object' ? asNumber(o[k]) : null);
   const skills = raw.skills && typeof raw.skills === 'object'
@@ -1001,19 +1556,27 @@ function parseHarness(text) {
     status: 'ok', message: '', health,
     generated: asText(raw.generated).trim() || null,
     scaffoldVersion: asText(raw.scaffold_version).trim() || null,
+    /* Additive, from the myPKA generator: the team's own version, since in
+       mode B `scaffold_version` names no version at all. */
+    mypkaVersion: asText(raw.mypka_version).trim() || null,
+    path: at, oldLocation: at === HARNESS_PATH_OLD,
     skills, files, tests, problems, notes: asList(raw.notes), hosts,
   };
 }
 
 /* The harness file through the engine's fs interface: absent is 'missing',
    unreadable is 'invalid'. Never throws. */
-async function loadHarness(fs) {
-  let present = false;
-  try { present = await fs.exists(HARNESS_PATH); } catch { present = false; }
-  if (!present) return parseHarness(null);
-  let text;
-  try { text = await fs.read(HARNESS_PATH); } catch { return noHarness('invalid', '`' + HARNESS_PATH + '` exists but could not be read, so the harness is not shown.'); }
-  return parseHarness(text);
+async function loadHarness(fs, opts) {
+  if (opts && opts.teamHere === false) return noHarness('elsewhere', HARNESS_ELSEWHERE);
+  for (const path of [HARNESS_PATH, HARNESS_PATH_OLD]) {
+    let present = false;
+    try { present = await fs.exists(path); } catch { present = false; }
+    if (!present) continue;
+    let text;
+    try { text = await fs.read(path); } catch { return noHarness('invalid', '`' + path + '` exists but could not be read, so the harness is not shown.'); }
+    return parseHarness(text, { path });
+  }
+  return parseHarness(null);
 }
 
 /* The frontmatter keys the report carries for the harness, so a Base can
@@ -1037,7 +1600,7 @@ function harnessFrontmatter(h) {
 function renderHarness(h) {
   const L = [];
   if (!h || h.status !== 'ok') {
-    L.push('## Harness (' + (h && h.status !== 'missing' ? 'unreadable' : 'no data yet') + ')');
+    L.push('## Harness (' + (h && h.status === 'elsewhere' ? 'team lives elsewhere' : h && h.status !== 'missing' ? 'unreadable' : 'no data yet') + ')');
     L.push('');
     L.push(h ? h.message : NO_HARNESS_DATA);
     L.push('');
@@ -1045,10 +1608,14 @@ function renderHarness(h) {
   }
   L.push('## Harness (' + h.health + ')');
   L.push('');
-  L.push('Which AI hosts this vault is wired to, read from `' + HARNESS_PATH + '` as `scaffold-init.py doctor --json` wrote it '
+  L.push('Which AI hosts this vault is wired to, read from `' + (h.path || HARNESS_PATH) + '` as `scaffold-init.py doctor --json` wrote it '
     + (h.generated ? 'on ' + h.generated : 'at an unknown time')
-    + (h.scaffoldVersion ? ' against scaffold ' + h.scaffoldVersion : '') + '. This check only reads it; the generator looks.');
+    + (h.mypkaVersion ? ' against myPKA ' + h.mypkaVersion : h.scaffoldVersion ? ' against scaffold ' + h.scaffoldVersion : '') + '. This check only reads it; the generator looks.');
   L.push('');
+  if (h.oldLocation) {
+    L.push('**Old location:** this file is where the generator wrote it before the split. Run `python3 "' + GEN_SCRIPT + '" doctor --json` again, and it writes `' + HARNESS_PATH + '`, which this check reads first.');
+    L.push('');
+  }
   if (h.hosts.length) {
     L.push('| Host | Detected | Installed | Trusted | Guards tested | Unsupported |');
     L.push('|---|---|---|---|---|---|');
@@ -1123,12 +1690,78 @@ const COLLAPSE_SUMMARY = {
   'generated-intact': (n) => '**' + n + ' generated files, all current.** Each is written from your own vault by `scaffold-init.py apply` and still matches the hash in its own header, so each differs from the scaffold only because your source does. Nothing to do.',
 };
 
+/* One severity group's findings as lines, grouped by kind so seventy
+   missing files read as "6 guidelines, 13 SOPs" with the list under each,
+   rather than seventy lines. Order is the order the kinds first appear in,
+   which is the manifest's order. `h` is the heading prefix for the kinds. */
+function findingGroupLines(rows, h) {
+  const L = [];
+  const groupOf = (f) => (f.kind === 'file' ? f.fileKind || 'file' : f.kind);
+  const kinds = [];
+  for (const f of rows) if (!kinds.includes(groupOf(f))) kinds.push(groupOf(f));
+  for (const kind of kinds) {
+    const sub = rows.filter((f) => groupOf(f) === kind);
+    if (kinds.length > 1) { L.push(h + ' ' + (KIND_LABELS[kind] || kind) + ' (' + sub.length + ')'); L.push(''); }
+    const counted = new Map();
+    for (const f of sub) {
+      if (f.collapse && COLLAPSE_SUMMARY[f.collapse] && sub.filter((x) => x.collapse === f.collapse).length > 1) {
+        counted.set(f.collapse, (counted.get(f.collapse) || 0) + 1);
+        continue;
+      }
+      L.push('- **`' + f.path + '`** ' + f.message);
+      L.push('  - Do: ' + f.action);
+    }
+    for (const [key, n] of counted) L.push('- ' + COLLAPSE_SUMMARY[key](n));
+    L.push('');
+  }
+  return L;
+}
+
+const SEVERITY_GROUPS = [
+  ['broken', 'Broken', 'Structure the scaffold relies on. Fix these first.'],
+  ['attention', 'Attention', 'Things to do, in the order they appear.'],
+  ['info', 'Info', 'Worth knowing. Nothing to do unless you want to.'],
+];
+
+/* Every severity group of `findings`, headed at level `h` ("##"), kinds one
+   level below. */
+function severityLines(findings, h) {
+  const L = [];
+  for (const [sev, title, lead] of SEVERITY_GROUPS) {
+    const rows = findings.filter((f) => f.severity === sev);
+    if (!rows.length) continue;
+    L.push(h + ' ' + title + ' (' + rows.length + ')');
+    L.push('');
+    L.push(lead);
+    L.push('');
+    for (const line of findingGroupLines(rows, h + '#')) L.push(line);
+  }
+  return L;
+}
+
+const SECTION_STATUS_TEXT = { ok: 'ok', attention: 'attention', broken: 'broken', offline: 'not checked, offline', 'not-checked': 'not checked', elsewhere: 'lives elsewhere' };
+
+/* The paragraph for your AI. The single-product wording (before 0.7.0) and
+   the two-product one share every rule; the second one names which product
+   a missing file comes from, because copying a team file from ICOR for
+   Life, or a content file from myPKA, is exactly the mistake the split
+   makes easy. */
+function aiPrompt(suite) {
+  const copy = suite
+    ? 'for a missing canonical file, copy it from the latest release of the product whose section lists it: the ICOR for Life Scaffold for the ICOR for Life (content) section, myPKA for the myPKA (team) section, never from the other one; a file the report does not call a leftover is not one, so never delete a team file because ICOR for Life stopped shipping it, it moved to myPKA; for an `.update` file, show me the difference, merge what I choose into my file, then delete the `.update` file;'
+    : 'for a missing canonical file, copy it from the latest ICOR for Life Scaffold;';
+  return 'Read the Scaffold Check report at the path of this note. Fix every Broken item, then every Attention item, in order. Rules: never overwrite a file the report says I edited; for a leftover, delete it only after reading the changelog line the report cites; '
+    + copy + ' never change or reuse a `myicor_id`, an agent keeps its id for life; never hand-edit anything under Generated harness layer, change the source the report names and run `python3 "' + GEN_SCRIPT + '" apply` instead. Show me each change before you make it. Then read the Knowledge quality section and run SOP-1014 for what it lists; propose repairs, apply only after I say yes.';
+}
+
 /* The report note. Frontmatter carries the numbers so a Base or a script can
-   read it; the body is for the person, grouped by what to do. opts.quality
-   is a parseQuality() result; absent, the quality section says there is no
-   data yet. */
+   read it; the body is for the person, grouped by what to do. `result` is a
+   runSuite() result (two sections, 0.7.0) or a runChecks() one (one
+   product, the shape before 0.7.0). opts.quality is a parseQuality()
+   result; absent, the quality section says there is no data yet. */
 function renderReport(result, opts) {
-  const o = Object.assign({ now: new Date(), today: '', manifestUrl: '', vaultName: '', quality: null, harness: null }, opts || {});
+  const o = Object.assign({ now: new Date(), today: '', manifestUrl: '', mypkaManifestUrl: '', vaultName: '', quality: null, harness: null }, opts || {});
+  const suite = result && result.suite === true;
   /* The caller passes the day it named the file after, so the note and its
      own filename cannot disagree. Without one, the local day of `now`. */
   const stamp = ISO_DAY_RE.test(String(o.today)) ? String(o.today) : localDayStr(o.now);
@@ -1137,8 +1770,13 @@ function renderReport(result, opts) {
   L.push('type: scaffold-check');
   L.push('date: ' + stamp);
   L.push('health: ' + result.health);
+  if (suite) L.push('mode: ' + result.mode.name);
   L.push('installed_version: ' + (result.installedVersion || 'unknown'));
   L.push('latest_version: ' + (result.latestVersion || 'unknown'));
+  if (suite) {
+    L.push('mypka_installed_version: ' + (result.mypkaInstalledVersion || 'unknown'));
+    L.push('mypka_latest_version: ' + (result.mypkaLatestVersion || 'unknown'));
+  }
   L.push('broken: ' + result.counts.broken);
   L.push('attention: ' + result.counts.attention);
   L.push('info: ' + result.counts.info);
@@ -1150,13 +1788,22 @@ function renderReport(result, opts) {
   L.push('');
   const verdict = result.health === 'ok' ? 'Everything the scaffold relies on is present and current.'
     : result.health === 'broken' ? 'Something the scaffold relies on is missing. Fix the broken items first; the plugins and the AI Team assume they exist.'
+    : result.health === 'offline' ? 'Part of this check could not run: a latest manifest could not be read. What could be checked is below.'
     : 'Nothing is broken. There are things to do.';
   L.push('**' + verdict + '**');
   L.push('');
   L.push('| | |');
   L.push('|---|---|');
-  L.push('| Installed version | ' + (result.installedVersion || 'unknown') + ' |');
-  L.push('| Latest version | ' + (result.latestVersion || 'unknown') + ' |');
+  if (suite) {
+    L.push('| This vault | ' + (MODE_TEXT[result.mode.name] || result.mode.name) + ' |');
+    L.push('| ICOR for Life installed | ' + (result.installedVersion || 'unknown') + ' |');
+    L.push('| ICOR for Life latest | ' + (result.latestVersion || 'unknown') + ' |');
+    L.push('| myPKA installed | ' + (result.mypkaInstalledVersion || 'unknown') + ' |');
+    L.push('| myPKA latest | ' + (result.mypkaLatestVersion || 'unknown') + ' |');
+  } else {
+    L.push('| Installed version | ' + (result.installedVersion || 'unknown') + ' |');
+    L.push('| Latest version | ' + (result.latestVersion || 'unknown') + ' |');
+  }
   L.push('| Broken | ' + result.counts.broken + ' |');
   L.push('| Attention | ' + result.counts.attention + ' |');
   L.push('| Info | ' + result.counts.info + ' |');
@@ -1164,38 +1811,24 @@ function renderReport(result, opts) {
   L.push('Read-only: this check changed nothing. Your own files, the ones the scaffold never shipped, are not counted.');
   L.push('');
 
-  const groups = [
-    ['broken', 'Broken', 'Structure the scaffold relies on. Fix these first.'],
-    ['attention', 'Attention', 'Things to do, in the order they appear.'],
-    ['info', 'Info', 'Worth knowing. Nothing to do unless you want to.'],
-  ];
-  for (const [sev, title, lead] of groups) {
-    const rows = result.findings.filter((f) => f.severity === sev);
-    if (!rows.length) continue;
-    L.push('## ' + title + ' (' + rows.length + ')');
-    L.push('');
-    L.push(lead);
-    L.push('');
-    /* Grouped by kind, so seventy missing files read as "6 guidelines, 13
-       SOPs" with the list under each, rather than seventy lines. Order is
-       the order the kinds first appear in, which is the manifest's order. */
-    const groupOf = (f) => (f.kind === 'file' ? f.fileKind || 'file' : f.kind);
-    const kinds = [];
-    for (const f of rows) if (!kinds.includes(groupOf(f))) kinds.push(groupOf(f));
-    for (const kind of kinds) {
-      const sub = rows.filter((f) => groupOf(f) === kind);
-      if (kinds.length > 1) { L.push('### ' + (KIND_LABELS[kind] || kind) + ' (' + sub.length + ')'); L.push(''); }
-      const counted = new Map();
-      for (const f of sub) {
-        if (f.collapse && COLLAPSE_SUMMARY[f.collapse] && sub.filter((x) => x.collapse === f.collapse).length > 1) {
-          counted.set(f.collapse, (counted.get(f.collapse) || 0) + 1);
-          continue;
-        }
-        L.push('- **`' + f.path + '`** ' + f.message);
-        L.push('  - Do: ' + f.action);
-      }
-      for (const [key, n] of counted) L.push('- ' + COLLAPSE_SUMMARY[key](n));
+  if (!suite) {
+    for (const line of severityLines(result.findings, '##')) L.push(line);
+  } else {
+    for (const repo of ['icor', 'mypka']) {
+      const s = result.sections[repo];
+      const rows = result.findings.filter((f) => f.repo === repo);
+      L.push('## ' + s.title + ' (' + (SECTION_STATUS_TEXT[s.status] || s.status) + ')');
       L.push('');
+      L.push('Installed ' + (s.installedVersion || 'unknown') + ', latest ' + (s.latestVersion || 'unknown') + '.');
+      L.push('');
+      if (!rows.length) { L.push('Nothing to report.'); L.push(''); }
+      for (const line of severityLines(rows, '###')) L.push(line);
+    }
+    const pair = result.findings.filter((f) => f.repo === 'pair');
+    if (pair.length) {
+      L.push('## Both together');
+      L.push('');
+      for (const line of severityLines(pair, '###')) L.push(line);
     }
   }
 
@@ -1207,11 +1840,15 @@ function renderReport(result, opts) {
   L.push('Paste this into your AI session to have the fixes done for you. Everything above is the input; nothing here changes a file on its own.');
   L.push('');
   L.push('```');
-  L.push('Read the Scaffold Check report at the path of this note. Fix every Broken item, then every Attention item, in order. Rules: never overwrite a file the report says I edited; for a leftover, delete it only after reading the changelog line the report cites; for a missing canonical file, copy it from the latest ICOR for Life Scaffold; never change or reuse a `myicor_id`, an agent keeps its id for life; never hand-edit anything under Generated harness layer, change the source the report names and run `python3 "' + GEN_SCRIPT + '" apply` instead. Show me each change before you make it. Then read the Knowledge quality section and run SOP-1014 for what it lists; propose repairs, apply only after I say yes.');
+  L.push(aiPrompt(suite));
   L.push('```');
   L.push('');
   if (o.manifestUrl) {
-    L.push('Latest manifest: ' + o.manifestUrl);
+    L.push((suite ? 'Latest ICOR for Life manifest: ' : 'Latest manifest: ') + o.manifestUrl);
+    L.push('');
+  }
+  if (suite && o.mypkaManifestUrl) {
+    L.push('Latest myPKA manifest: ' + o.mypkaManifestUrl);
     L.push('');
   }
   return L.join('\n');
@@ -1258,7 +1895,7 @@ async function loadHistory(fs) {
 function runRecord(result, quality, now) {
   const metrics = {};
   if (quality && quality.status === 'ok') for (const m of quality.metrics) if (m.value !== null) metrics[m.id] = m.value;
-  return {
+  const rec = {
     at: (now || new Date()).toISOString(),
     health: result.health,
     broken: result.counts.broken,
@@ -1267,6 +1904,26 @@ function runRecord(result, quality, now) {
     quality_health: quality && quality.status === 'ok' ? quality.health : 'unknown',
     metrics,
   };
+  /* Since 0.7.0, per product. parseHistory ignores keys it does not know,
+     so HISTORY_SCHEMA stays 1 and an older build still reads the file. */
+  if (result && result.suite === true) {
+    rec.mode = result.mode.name;
+    rec.repos = {};
+    for (const repo of ['icor', 'mypka']) {
+      const s = result.sections[repo];
+      const c = countFindings(result.findings.filter((f) => f.repo === repo));
+      rec.repos[repo] = { status: s.status, installed: s.installedVersion || null, latest: s.latestVersion || null, broken: c.broken, attention: c.attention, info: c.info };
+    }
+  }
+  return rec;
+}
+
+/* The run history lives in this plugin's subfolder of `.icor-for-life/`,
+   and is written only when that folder is already there. A myPKA team
+   folder opened as a vault has none, and creating one would plant an ICOR
+   for Life marker in a folder that is not ICOR for Life. */
+async function historyWritable(fs) {
+  try { return !!(await fs.exists(META_DIR)); } catch (e) { return false; }
 }
 
 /* history + record -> a new history holding the last HISTORY_CAP runs.
@@ -1305,7 +1962,7 @@ function sparklinePath(values, width, height) {
   }).join(' ');
 }
 
-const engine = { localDayStr, todayStr, localDayOfIso, parseVersion, compareVersions, baseFolders, scratchpadProblem, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, generatedState, generatedHeaderLine, isHarnessPath, isPartlyGenerated, isMachineState, parseHarness, loadHarness, harnessFrontmatter, renderHarness, KIND_LABELS, COLLAPSE_SUMMARY, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS, GEN_MARK, GEN_SCRIPT, HARNESS_PATH, HARNESS_SCHEMA, HARNESS_TEXT, HARNESS_TESTED_TEXT, HARNESS_TRUSTED_TEXT, HARNESS_HOST_LABELS, HOST_LINKS_DIR, SKILLS_DIR, NO_HARNESS_DATA };
+const engine = { normalizeManifest, kindOf, preRelease, compareCore, parseRequires, parseImplements, tokenAllowedFor, isDescriptor, detectMode, readLocalPair, readLocalPairs, runSuite, historyWritable, countFindings, MYPKA_DIR, CONTENT_ROOMS, SPLIT_VERSION, HARNESS_PATH_OLD, HARNESS_ELSEWHERE, TEAM_ELSEWHERE, CONTENT_ELSEWHERE, MODE_TEXT, TOKEN_HOSTS, localDayStr, todayStr, localDayOfIso, parseVersion, compareVersions, baseFolders, scratchpadProblem, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, generatedState, generatedHeaderLine, isHarnessPath, isPartlyGenerated, isMachineState, parseHarness, loadHarness, harnessFrontmatter, renderHarness, KIND_LABELS, COLLAPSE_SUMMARY, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS, GEN_MARK, GEN_SCRIPT, HARNESS_PATH, HARNESS_SCHEMA, HARNESS_TEXT, HARNESS_TESTED_TEXT, HARNESS_TRUSTED_TEXT, HARNESS_HOST_LABELS, HOST_LINKS_DIR, SKILLS_DIR, NO_HARNESS_DATA };
 
 /* ============================================= where the token lives ===== */
 /*
@@ -1488,6 +2145,10 @@ if (obsidian) {
 
   const DEFAULTS = {
     manifestUrl: DEFAULT_MANIFEST_URL,
+    /* Where the latest myPKA manifest is published. Blank until myPKA has a
+       public repository: blank means "not checked", and the plugin never
+       guesses a URL. */
+    mypkaManifestUrl: '',
     /* '' means "the default for this Obsidian": the keychain when it has
        one, the env file otherwise. resolveBackend() answers each time. */
     secretsBackend: '',
@@ -1654,20 +2315,23 @@ if (obsidian) {
       el.setAttribute('aria-label', STATUS_TEXT[health] || STATUS_TEXT.unknown);
     }
 
+    /* Both version folders, `.icor-for-life/` and `.mypka/`, through the
+       adapter: they are dot folders, which the file index never holds. */
     async readLocal() {
       const fs = vaultFs(this.app);
-      let installedVersion = null, local = null;
-      try { if (await fs.exists(META_DIR + '/VERSION')) installedVersion = String(await fs.read(META_DIR + '/VERSION')).trim(); } catch (e) { installedVersion = null; }
-      try { if (await fs.exists(META_DIR + '/manifest.json')) local = JSON.parse(await fs.read(META_DIR + '/manifest.json')); } catch (e) { local = null; }
-      return { fs, installedVersion, local };
+      return { fs, local: await engine.readLocalPairs(fs) };
     }
 
-    async fetchRemote() {
-      const url = (this.settings.manifestUrl || '').trim();
+    /* One latest manifest. The token is sent only to a GitHub host
+       (tokenAllowedFor), never to whatever host a URL setting names. */
+    async fetchRemote(rawUrl) {
+      const url = (rawUrl || '').trim();
       if (!url) throw new Error('no manifest URL is set');
       const headers = { Accept: 'application/json' };
-      const token = await this.readToken();
-      if (token) headers.Authorization = 'Bearer ' + token;
+      if (tokenAllowedFor(url)) {
+        const token = await this.readToken();
+        if (token) headers.Authorization = 'Bearer ' + token;
+      }
       const resp = await requestUrl({ url, headers, throw: false });
       if (resp.status !== 200) throw new Error('HTTP ' + resp.status + ' fetching the latest manifest');
       const data = typeof resp.json === 'object' && resp.json ? resp.json : JSON.parse(resp.text);
@@ -1681,20 +2345,24 @@ if (obsidian) {
 
     async run({ interactive }) {
       this.paintStatus('unknown');
-      let remote;
-      try {
-        remote = await this.fetchRemote();
-      } catch (e) {
+      /* Two products, two fetches, one status each (0.7.0). A myPKA fetch
+         that fails never turns the ICOR for Life result offline; the status
+         bar shows the worse of the two. */
+      let icorRemote = null, icorError = '', mypkaRemote = null, mypkaError = '';
+      try { icorRemote = await this.fetchRemote(this.settings.manifestUrl); } catch (e) { icorError = e.message; }
+      const mypkaUrl = (this.settings.mypkaManifestUrl || '').trim();
+      if (mypkaUrl) { try { mypkaRemote = await this.fetchRemote(mypkaUrl); } catch (e) { mypkaError = e.message; } }
+      if (!icorRemote && !mypkaRemote) {
         this.paintStatus('offline');
         this.settings.lastHealth = 'offline';
         await this.saveData(this.settings);
-        if (interactive) new Notice('Scaffold Check: could not fetch the latest manifest (' + e.message + '). Check the URL and token in settings.');
+        if (interactive) new Notice('Scaffold Check: could not fetch the latest manifest (' + (icorError || mypkaError || 'no URL set') + '). Check the URLs and token in settings.');
         return null;
       }
-      const { fs, installedVersion, local } = await this.readLocal();
+      const { fs, local } = await this.readLocal();
       let result;
       try {
-        result = await engine.runChecks({ fs, hash: sha256Hex, remote, local, installedVersion, configDir: this.app.vault.configDir });
+        result = await engine.runSuite({ fs, hash: sha256Hex, configDir: this.app.vault.configDir, local, icorRemote, icorError, mypkaRemote, mypkaError, mypkaUrlSet: !!mypkaUrl });
       } catch (e) {
         this.paintStatus('offline');
         if (interactive) new Notice('Scaffold Check failed: ' + e.message);
@@ -1710,7 +2378,7 @@ if (obsidian) {
          script measures, this plugin shows. loadQuality never throws. */
       const quality = await engine.loadQuality(fs);
       this.lastQuality = quality;
-      const harness = await engine.loadHarness(fs);
+      const harness = await engine.loadHarness(fs, { teamHere: result.mode.team });
       this.lastHarness = harness;
 
       if (this.settings.writeReport) {
@@ -1719,6 +2387,7 @@ if (obsidian) {
       try { await this.appendHistory(result, quality); } catch (e) { if (interactive) new Notice('Scaffold Check: could not write the run history, so the dashboard trend misses this run.'); }
       this.refreshDashboard();
       if (interactive) this.showResult();
+      else if (result.health === 'offline') new Notice('Scaffold Check: one latest manifest could not be read, so part of the check did not run. Click the status bar for the report.');
       else if (result.health !== 'ok') new Notice('Scaffold Check: ' + result.counts.broken + ' broken, ' + result.counts.attention + ' to do. Click the status bar for the report.');
       return result;
     }
@@ -1728,13 +2397,22 @@ if (obsidian) {
     /* The quality file as parseQuality sees it. Read fresh every time: no
        vault event fires for a hidden folder (GL-1008). */
     readQuality() { return engine.loadQuality(vaultFs(this.app)); }
-    readHarness() { return engine.loadHarness(vaultFs(this.app)); }
+    /* The harness is the team's: in a vault without the team, it lives
+       elsewhere and is not looked for. */
+    async readHarness() {
+      const fs = vaultFs(this.app);
+      const teamHere = (await fs.exists('AGENTS.md')) && (await fs.exists(AGENTS_DIR));
+      return engine.loadHarness(fs, { teamHere });
+    }
     readHistory() { return engine.loadHistory(vaultFs(this.app)); }
 
     /* One record per completed run into this plugin's own subfolder of
-       `.icor-for-life/`, created on first write; never a path outside it. */
+       `.icor-for-life/`, created on first write; never a path outside it.
+       Only when `.icor-for-life/` is already there (0.7.0): a myPKA team
+       folder opened as a vault is not given an ICOR for Life marker. */
     async appendHistory(result, quality) {
       const fs = vaultFs(this.app);
+      if (!(await engine.historyWritable(fs))) return;
       const next = engine.appendRun(await engine.loadHistory(fs), engine.runRecord(result, quality));
       await fs.mkdir(HISTORY_DIR);
       await fs.write(HISTORY_PATH, JSON.stringify(next, null, 2) + '\n');
@@ -1846,7 +2524,7 @@ if (obsidian) {
          setting promises. */
       const today = todayStr();
       const path = normalizePath(folder + '/' + today + '-scaffold-check.md');
-      const text = engine.renderReport(result, { today, manifestUrl: this.settings.manifestUrl, quality: quality || null, harness: harness || null });
+      const text = engine.renderReport(result, { today, manifestUrl: this.settings.manifestUrl, mypkaManifestUrl: this.settings.mypkaManifestUrl, quality: quality || null, harness: harness || null });
       await fs.write(path, text);
       this.lastReportPath = path;
     }
@@ -1869,18 +2547,28 @@ if (obsidian) {
       head.createSpan({ cls: 'icor-scaffold-dot icor-scaffold-dot-' + r.health });
       head.createSpan({ text: STATUS_TEXT[r.health] });
       const meta = c.createEl('p', { cls: 'icor-scaffold-meta' });
-      meta.setText('Installed ' + (r.installedVersion || 'unknown') + ' · latest ' + (r.latestVersion || 'unknown') + ' · ' + r.counts.broken + ' broken · ' + r.counts.attention + ' attention · ' + r.counts.info + ' info');
-      for (const sev of ['broken', 'attention', 'info']) {
-        const rows = r.findings.filter((f) => f.severity === sev);
-        if (!rows.length) continue;
-        c.createEl('h3', { text: sev[0].toUpperCase() + sev.slice(1) + ' (' + rows.length + ')' });
-        const ul = c.createEl('ul');
-        for (const f of rows.slice(0, 40)) {
-          const li = ul.createEl('li');
-          li.createEl('code', { text: f.path });
-          li.createSpan({ text: ' ' + f.message });
+      meta.setText(r.counts.broken + ' broken · ' + r.counts.attention + ' attention · ' + r.counts.info + ' info');
+      /* One block per product, each with its own versions and findings. */
+      const parts = r.suite
+        ? [['icor', r.sections.icor], ['mypka', r.sections.mypka], ['pair', { title: 'Both together', status: '' }]]
+        : [[null, { title: '', installedVersion: r.installedVersion, latestVersion: r.latestVersion }]];
+      for (const [repo, s] of parts) {
+        const mine = repo ? r.findings.filter((f) => f.repo === repo) : r.findings;
+        if (repo === 'pair' && !mine.length) continue;
+        if (s.title) c.createEl('h3', { text: s.title });
+        if (repo !== 'pair') c.createEl('p', { cls: 'icor-scaffold-meta', text: 'Installed ' + (s.installedVersion || 'unknown') + ' · latest ' + (s.latestVersion || 'unknown') });
+        for (const sev of ['broken', 'attention', 'info']) {
+          const rows = mine.filter((f) => f.severity === sev);
+          if (!rows.length) continue;
+          c.createEl('h4', { text: sev[0].toUpperCase() + sev.slice(1) + ' (' + rows.length + ')' });
+          const ul = c.createEl('ul');
+          for (const f of rows.slice(0, 40)) {
+            const li = ul.createEl('li');
+            li.createEl('code', { text: f.path });
+            li.createSpan({ text: ' ' + f.message });
+          }
+          if (rows.length > 40) c.createEl('p', { text: (rows.length - 40) + ' more in the report.' });
         }
-        if (rows.length > 40) c.createEl('p', { text: (rows.length - 40) + ' more in the report.' });
       }
       const q = this.plugin.lastQuality;
       const qp = c.createEl('p', { cls: 'icor-scaffold-meta' });
@@ -1934,7 +2622,8 @@ if (obsidian) {
       h1.createSpan({ cls: 'icor-scaffold-dot icor-scaffold-dot-' + scaffoldHealth, attr: { 'aria-hidden': 'true' } });
       h1.createSpan({ text: STATUS_TEXT[scaffoldHealth] || STATUS_TEXT.unknown });
       t1.createDiv({ cls: 'icor-scaffold-meta', text: r
-        ? r.counts.broken + ' broken · ' + r.counts.attention + ' attention · ' + r.counts.info + ' info · installed ' + (r.installedVersion || 'unknown') + ', latest ' + (r.latestVersion || 'unknown')
+        ? r.counts.broken + ' broken · ' + r.counts.attention + ' attention · ' + r.counts.info + ' info · ICOR for Life ' + (r.installedVersion || 'unknown') + ', latest ' + (r.latestVersion || 'unknown')
+          + (r.suite ? ' · myPKA ' + (r.mypkaInstalledVersion || 'unknown') + ', latest ' + (r.mypkaLatestVersion || 'unknown') : '')
         : (s.lastRun ? 'Last run ' + (localDayOfIso(s.lastRun) || s.lastRun) + '. Run the check for the details.' : 'Not run yet.') });
 
       const qh = quality.status === 'ok' ? quality.health : 'unknown';
@@ -1948,18 +2637,18 @@ if (obsidian) {
         ? 'Measured ' + (quality.generated || 'at an unknown time') + (quality.ageDays !== null ? ' (' + quality.ageDays + ' days ago)' : '') + (quality.scaffoldVersion ? ' · scaffold ' + quality.scaffoldVersion : '') + ' · ' + quality.findings.length + ' findings'
         : 'Nothing measured yet.' });
 
-      const hh = harness.status === 'ok' ? harness.health : 'unknown';
+      const hh = harness.status === 'ok' ? harness.health : harness.status === 'elsewhere' ? 'elsewhere' : 'unknown';
       const t3 = tiles.createDiv({ cls: 'icor-scaffold-tile' });
       t3.createDiv({ cls: 'icor-scaffold-tile-label', text: 'Harness' });
       const h3 = t3.createDiv({ cls: 'icor-scaffold-head' });
-      h3.createSpan({ cls: 'icor-scaffold-dot icor-scaffold-dot-' + hh, attr: { 'aria-hidden': 'true' } });
+      h3.createSpan({ cls: 'icor-scaffold-dot icor-scaffold-dot-' + (hh === 'elsewhere' ? 'unknown' : hh), attr: { 'aria-hidden': 'true' } });
       h3.createSpan({ text: HARNESS_TEXT[hh] || HARNESS_TEXT.unknown });
       t3.createDiv({ cls: 'icor-scaffold-meta', text: harness.status === 'ok'
         ? harness.hosts.filter((x) => x.detected.length).length + ' of ' + harness.hosts.length + ' hosts detected'
           + (harness.skills && harness.skills.count !== null ? ' · ' + harness.skills.count + ' skills' : '')
           + (harness.tests ? ' · guards ' + (HARNESS_TESTED_TEXT[harness.tests.status] || harness.tests.status) : '')
           + (harness.generated ? ' · ' + harness.generated : '')
-        : 'Nothing looked at yet.' });
+        : hh === 'elsewhere' ? 'The team lives in its own folder.' : 'Nothing looked at yet.' });
 
       /* no data, or data this plugin cannot read: the one sentence */
       if (harness.status !== 'ok') {
@@ -2061,7 +2750,7 @@ if (obsidian) {
     display() {
       const c = this.containerEl;
       c.empty();
-      c.createEl('p', { text: 'Read-only. Compares this vault with the latest ICOR for Life Scaffold and writes a report. It never changes a scaffold file.' });
+      c.createEl('p', { text: 'Read-only. Compares this vault with the latest ICOR for Life Scaffold and, where the AI team is in this vault, the latest myPKA, and writes a report. It never changes a scaffold file.' });
       const s = this.plugin.settings;
       const plugin = this.plugin;
       const save = () => plugin.saveData(s);
@@ -2069,9 +2758,13 @@ if (obsidian) {
       const backend = plugin.backend();
       const label = BACKEND_LABEL[backend];
 
-      new Setting(c).setName('Latest manifest URL')
-        .setDesc('Where the latest scaffold\'s .icor-for-life/manifest.json is published. A raw file URL or a GitHub contents API URL.')
+      new Setting(c).setName('Latest ICOR for Life manifest URL')
+        .setDesc('Where the latest ICOR for Life Scaffold\'s .icor-for-life/manifest.json is published. A raw file URL or a GitHub contents API URL.')
         .addText((t) => t.setValue(s.manifestUrl).setPlaceholder(DEFAULT_MANIFEST_URL).onChange(async (v) => { s.manifestUrl = v.trim(); await save(); }));
+
+      new Setting(c).setName('Latest myPKA manifest URL')
+        .setDesc('Where the latest myPKA release\'s .mypka/manifest.json is published. Blank means the team side is not checked; this plugin never guesses a URL. Fetched only when set, as a second request next to the one above.')
+        .addText((t) => t.setValue(s.mypkaManifestUrl || '').setPlaceholder('https://...').onChange(async (v) => { s.mypkaManifestUrl = v.trim(); await save(); }));
 
       new Setting(c).setName('Where your keys live')
         .setDesc(storeOk
@@ -2100,7 +2793,7 @@ if (obsidian) {
       let pending = '';
       let input = null;
       new Setting(c).setName('GitHub token (optional)')
-        .setDesc('Only needed when the manifest URL is on a private repository. Saved to ' + label + ', sent only to the manifest URL\'s host, never written anywhere else. The field is cleared once the token is saved; the line below says where it is.')
+        .setDesc('Only needed when a manifest URL is on a private repository. Saved to ' + label + ', sent only to GitHub (github.com, api.github.com, raw.githubusercontent.com) and never to any other host, never written anywhere else. The field is cleared once the token is saved; the line below says where it is.')
         .addText((t) => {
           input = t;
           t.inputEl.type = 'password';

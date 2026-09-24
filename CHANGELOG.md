@@ -4,6 +4,65 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - Unreleased
+
+Reads the split: ICOR for Life Scaffold 2.0.0 (content, `.icor-for-life/`)
+and myPKA 1.0.0 (the AI team, `.mypka/`). Must be live before the Scaffold's
+2.0.0 reaches `main`: 0.6.0 cannot read the new manifest shape and shows
+"Scaffold: offline" (nothing is deleted).
+
+### Fixed
+- **A team file that moved to myPKA is never reported as a leftover.** At
+  2.0.0 the Scaffold's history lists every team file it no longer ships as
+  removed, with the old hashes, so an untouched `AGENTS.md` or agent
+  contract matched and would have read "Delete it". A path the myPKA
+  manifest ships is now a move, judged in the myPKA section. Only a path in
+  neither product is a leftover (in the lab, `CLAUDE.md` and `GEMINI.md`).
+  Without the myPKA manifest, those removals are not judged, and one line
+  says why.
+- Both manifest shapes are read: the list of 1.x and the map of 2.0.0, under
+  schema 1 or 2. 0.6.0 threw "not a scaffold manifest" on the new one, and
+  crashed on a local manifest in the new shape.
+- "Canonical undefined is missing" now names the kind ("Canonical guideline
+  is missing"), with the builder's own rules.
+- Example notes are known from the manifest's `examples` list, or from your
+  installed 1.x manifest while the list is not published yet.
+- `2.0.0-lab` sorts below `2.0.0`, as the builders sort.
+
+### Added
+- **Mode detection.** Content and team in one vault, content only (mode B:
+  "the myPKA team is not in this vault ... nothing is missing here"), or a
+  team folder opened as a vault ("the content lives elsewhere").
+- **Two sections in the report**, ICOR for Life (content) and myPKA (team),
+  each with its versions and findings; new report keys `mode`,
+  `mypka_installed_version`, `mypka_latest_version`.
+- **A second setting, "Latest myPKA manifest URL"**, blank by default. A
+  failed myPKA fetch never turns the ICOR for Life result offline; the status
+  bar shows the worse of the two.
+- **The installed pair.** myPKA's `requires` against ICOR for Life's
+  `implements`: out of range is broken ("session start will refuse"); a newer
+  ICOR for Life outside your myPKA's range says to update myPKA first.
+- Agent identities are read from the myPKA manifest.
+- An `.update` file the updater left beside an edited file is one "waiting
+  for your merge" item.
+- Without an installed manifest, the release's `previous` hashes tell an
+  older shipped copy (safe to update) from your edit.
+- On a device without dot folders (Obsidian Sync), one line per product
+  instead of a missing file per path.
+
+### Changed
+- The harness is read from `.mypka/state/harness.json` first, then from the
+  old `.icor-for-life/scripts/harness.json`, labelled as the old location. In
+  a vault without the team it says the team lives elsewhere.
+- The GitHub token is sent only to GitHub hosts, never to another host a URL
+  setting names.
+- Seed files (`.obsidian/workspace.json`, `.mcp.json`) are reported only when
+  missing, never as changed. The version folders' own `VERSION`,
+  `CHANGELOG.md` and `README.md` are no longer compared file by file.
+- The run history is written only where `.icor-for-life/` already exists, and
+  records each product separately.
+- `GEMINI.md` is no longer treated as a generated file.
+
 ## [0.6.0] - 2026-09-21
 
 ### Changed

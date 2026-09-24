@@ -2,9 +2,10 @@
 
 **Is your vault still the shape it should be?**
 
-Compares your vault with the latest ICOR for Life Scaffold, read-only, and
-writes you a report: what is missing, what you changed, what moved, and what
-the Scaffold changed since your copy.
+Compares your vault with the latest ICOR for Life Scaffold and, where your AI
+team lives in the same vault, the latest myPKA, read-only, and writes you a
+report: what is missing, what you changed, what moved, and what changed
+upstream since your copy.
 
 Part of the [ICOR for Life](https://myicor.com) suite.
 
@@ -23,6 +24,26 @@ It never changes anything. It only looks.
 
 Run **Check the scaffold** from the command palette. The report lands in your
 vault as a note.
+
+## ICOR for Life and myPKA (0.7.0)
+
+Since ICOR for Life Scaffold 2.0.0 the AI team is its own product, myPKA,
+with its own version folder `.mypka/` next to `.icor-for-life/`. The check
+first works out what this vault holds:
+
+- **Both** (content and team in one vault): two sections in the report,
+  "ICOR for Life (content)" and "myPKA (team)", each against its own latest
+  release, plus whether the installed pair fits together.
+- **Only the content** (the team lives in its own folder): the content is
+  checked, and the team side is one line saying it lives elsewhere. Never a
+  missing file.
+- **Only the team** (a myPKA folder opened as a vault): the team is checked,
+  and the content side is one line saying it lives elsewhere.
+
+A team file the Scaffold stopped shipping at 2.0.0 because myPKA ships it
+now is a move, not a leftover, and the report never tells you to delete it.
+Until the myPKA manifest URL is set, those files are not judged at all, and
+one line says so.
 
 ## What the report tells you
 
@@ -64,8 +85,16 @@ thing over and have it propose fixes before anything is applied.
 ## What it touches
 
 - **Reads your vault**, and writes exactly one file: the report.
-- **Fetches the latest Scaffold manifest** from the URL in settings, so it
-  knows what to compare against. That is its only network call.
+- **Fetches the latest manifests** so it knows what to compare against. Two
+  network calls at most, both plain GET requests for a JSON file:
+  - the latest ICOR for Life manifest, from "Latest ICOR for Life manifest
+    URL" in settings (by default the Scaffold's `manifest.json` on GitHub);
+  - the latest myPKA manifest, from "Latest myPKA manifest URL", only when
+    you have set one. It is blank by default and the plugin never guesses it.
+
+  If you save a GitHub token (for a private repository), it is sent only to
+  `github.com`, `api.github.com` and `raw.githubusercontent.com`, never to any
+  other host a URL setting names. Nothing about your vault is ever sent.
 
 **It changes nothing else, ever.** The whole design is read-only.
 
@@ -74,6 +103,10 @@ thing over and have it propose fixes before anything is applied.
 - **It reports; you decide.** Nothing is fixed automatically.
 - **A vault with no `.icor-for-life/` folder** cannot be compared precisely.
   The report says so rather than guessing.
+- **Obsidian Sync does not carry dot folders**, so on a device that got the
+  vault through Sync, `.icor-for-life/`, `.mypka/` and `.claude/` are not
+  there. The report says that in one line per product instead of listing
+  every file as missing. Run the check on the device you installed on.
 - **Beta.** In daily use in a real vault, and you will find rough edges. If
   something looks off, open an issue.
 
