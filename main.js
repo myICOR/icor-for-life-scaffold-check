@@ -74,6 +74,9 @@ let obsidian = null;
 try { obsidian = require('obsidian'); } catch (e) { obsidian = null; }
 
 const META_DIR = '.icor-for-life';
+/* Obsidian's default config folder, as a manifest names it. The live vault's
+   own is `app.vault.configDir`; a manifest path is always the default. */
+const CONFIG_DIR = '.obsidian';
 const DEFAULT_MANIFEST_URL =
   'https://raw.githubusercontent.com/TomSolid/icor-for-life-scaffold/main/.icor-for-life/manifest.json';
 const DEFAULT_REPORT_FOLDER = '06 AI Team/AI Team Knowledge/Scaffold Check';
@@ -199,10 +202,17 @@ function kindOf(path) {
   if (p.includes('/Agents/')) return 'agent';
   if (p.includes('/Scripts/')) return 'script';
   if (p.includes('/Avatars/') || p.includes('/Brand/')) return 'asset';
-  if (p.startsWith('.obsidian/')) return 'config';
+  if (p.startsWith(CONFIG_DIR + '/')) return 'config';
   if (p.startsWith('.claude/')) return 'claude';
   return 'doc';
 }
+
+/* A manifest is untrusted input (Vex, 0.7.0). A path is read only when it is
+   vault-relative and cannot climb out: no leading slash or backslash, no
+   drive letter, no backslash at all, no `..`, `.` or empty segment. A note
+   reaches the report only without markdown that could render or link. */
+const safeRel = (p) => typeof p === 'string' && p.length < 512 && !/^[/\\]|^[A-Za-z]:|\\/.test(p) && !p.split('/').some((s) => s === '..' || s === '.' || s === '');
+const md = (s) => String(s).replace(/[`![\]<>()]/g, '').slice(0, 200);
 
 const strings = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string' && s) : []);
 
@@ -234,14 +244,14 @@ function normalizeManifest(raw) {
   const files = new Map();
   if (shape === 'list') {
     for (const f of src) {
-      if (!f || typeof f !== 'object' || typeof f.path !== 'string' || !f.path) continue;
+      if (!f || typeof f !== 'object' || !safeRel(f.path)) continue;
       if (f.example === true) flagged.add(f.path);
       files.set(f.path, { path: f.path, sha256: typeof f.sha256 === 'string' ? f.sha256 : '', kind: typeof f.kind === 'string' && f.kind ? f.kind : kindOf(f.path) });
     }
   } else {
     for (const path of Object.keys(src)) {
       const v = src[path];
-      if (v === 'self' || typeof v !== 'string' || !path) continue; /* the manifest's own entry */
+      if (v === 'self' || typeof v !== 'string' || !safeRel(path)) continue; /* the manifest's own entry, or an unsafe path */
       files.set(path, { path, sha256: v, kind: kindOf(path) });
     }
   }
@@ -318,12 +328,16 @@ function removalsSince(manifest, installed) {
     const after = installed ? compareVersions(h.version, installed) > 0 : true;
     if (!after) continue;
     for (const r of h.removed || []) {
-      if (!r || typeof r.path !== 'string') continue;
+      if (!r || !safeRel(r.path)) continue;
+      if (r.moved_to !== undefined && !safeRel(r.moved_to)) continue;
       /* `moved_to` (the builders from schema 2): the file did not go away,
          it moved to the other product. Carried so a caller can say so. */
-      out.push({ path: r.path, sha256: r.sha256 || '', note: r.note || '', version: h.version, movedTo: typeof r.moved_to === 'string' ? r.moved_to : '' });
+      out.push({ path: r.path, sha256: r.sha256 || '', note: r.note ? md(r.note) : '', version: h.version, movedTo: typeof r.moved_to === 'string' ? r.moved_to : '' });
     }
-    for (const r of h.renamed || []) out.push({ path: r.from, sha256: r.from_sha256 || '', note: 'renamed to `' + r.to + '`', version: h.version, to: r.to });
+    for (const r of h.renamed || []) {
+      if (!r || !safeRel(r.from) || !safeRel(r.to)) continue;
+      out.push({ path: r.from, sha256: r.from_sha256 || '', note: 'renamed to `' + md(r.to) + '`', version: h.version, to: r.to });
+    }
   }
   return out;
 }
@@ -697,7 +711,7 @@ async function checkAgents({ fs, remote, add, metaDir, product }) {
  */
 async function runChecks(args) {
   const { fs, hash, configDir } = args;
-  const cfg = (configDir || '.obsidian').replace(/\/+$/, '');
+  const cfg = (configDir || CONFIG_DIR).replace(/\/+$/, '');
   const repo = args.repo || 'icor';
   const metaDir = args.metaDir || META_DIR;
   const product = args.product || 'scaffold';
@@ -931,12 +945,12 @@ async function runChecks(args) {
     }
     if (same) {
       add('leftover', 'attention', r.path,
-        'Removed from the ' + product + ' in ' + r.version + (r.note ? ': ' + r.note : '.'),
+        'Removed from the ' + product + ' in ' + r.version + (r.note ? ': ' + (r.to ? r.note : md(r.note)) : '.'),
         'Delete it after reading the ' + r.version + ' changelog entry. Nothing in the ' + product + ' reads it any more.', { since: r.version });
     } else {
       add('collision', 'info', r.path,
-        'Shares its name with a ' + product + ' file that was ' + (r.to ? 'renamed to `' + r.to + '`' : 'removed') + ' in ' + r.version + ', but not its content, so it is yours.',
-        'Keep it. Nothing to do' + (r.to ? '; the ' + product + '\'s own document now lives at `' + r.to + '`.' : '.'), { since: r.version });
+        'Shares its name with a ' + product + ' file that was ' + (r.to ? 'renamed to `' + md(r.to) + '`' : 'removed') + ' in ' + r.version + ', but not its content, so it is yours.',
+        'Keep it. Nothing to do' + (r.to ? '; the ' + product + '\'s own document now lives at `' + md(r.to) + '`.' : '.'), { since: r.version });
     }
   }
   if (unjudged.length) {
@@ -2334,6 +2348,7 @@ if (obsidian) {
       }
       const resp = await requestUrl({ url, headers, throw: false });
       if (resp.status !== 200) throw new Error('HTTP ' + resp.status + ' fetching the latest manifest');
+      if ((resp.text || '').length > 5e6) throw new Error('manifest too large');
       const data = typeof resp.json === 'object' && resp.json ? resp.json : JSON.parse(resp.text);
       /* The GitHub contents API wraps the file in base64; unwrap it so an API
          URL works as well as a raw one. */
@@ -2750,7 +2765,7 @@ if (obsidian) {
     display() {
       const c = this.containerEl;
       c.empty();
-      c.createEl('p', { text: 'Read-only. Compares this vault with the latest ICOR for Life Scaffold and, where the AI team is in this vault, the latest myPKA, and writes a report. It never changes a scaffold file.' });
+      c.createEl('p', { text: 'Read-only. Compares this vault with the latest ICOR for Life scaffold and, where the AI team is in this vault, the latest myPKA, and writes a report. It never changes a scaffold file.' });
       const s = this.plugin.settings;
       const plugin = this.plugin;
       const save = () => plugin.saveData(s);
@@ -2764,7 +2779,7 @@ if (obsidian) {
 
       new Setting(c).setName('Latest myPKA manifest URL')
         .setDesc('Where the latest myPKA release\'s .mypka/manifest.json is published. Blank means the team side is not checked; this plugin never guesses a URL. Fetched only when set, as a second request next to the one above.')
-        .addText((t) => t.setValue(s.mypkaManifestUrl || '').setPlaceholder('https://...').onChange(async (v) => { s.mypkaManifestUrl = v.trim(); await save(); }));
+        .addText((t) => t.setValue(s.mypkaManifestUrl || '').setPlaceholder('https://raw.githubusercontent.com/<owner>/<repo>/main/.mypka/manifest.json').onChange(async (v) => { s.mypkaManifestUrl = v.trim(); await save(); }));
 
       new Setting(c).setName('Where your keys live')
         .setDesc(storeOk
