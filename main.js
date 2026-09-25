@@ -78,7 +78,7 @@ const META_DIR = '.icor-for-life';
    own is `app.vault.configDir`; a manifest path is always the default. */
 const CONFIG_DIR = '.obsidian';
 const DEFAULT_MANIFEST_URL =
-  'https://raw.githubusercontent.com/TomSolid/icor-for-life-scaffold/main/.icor-for-life/manifest.json';
+  'https://raw.githubusercontent.com/myICOR/icor-for-life-scaffold/main/.icor-for-life/manifest.json';
 const DEFAULT_REPORT_FOLDER = '06 AI Team/AI Team Knowledge/Scaffold Check';
 const STATUS_TEXT = { ok: 'Scaffold ok', attention: 'Scaffold: attention', broken: 'Scaffold: broken', offline: 'Scaffold: offline', unknown: 'Scaffold: not checked' };
 
