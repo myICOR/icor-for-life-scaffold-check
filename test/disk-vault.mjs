@@ -46,6 +46,15 @@ export function diskVault(root, { configDir = '.obsidian' } = {}) {
     listAgentContracts: async () => kids(AGENTS_DIR)
       .map((n) => AGENTS_DIR + '/' + n + '/AGENT.md')
       .filter((p) => existsSync(abs(p))),
+    /* The adapter's `list`: the direct children of one folder, as full
+       paths, dot entries included; a missing folder lists empty. */
+    list: async (p) => {
+      const names = kids(p);
+      return {
+        files: names.filter((n) => !isDir(p + '/' + n)).map((n) => p + '/' + n),
+        folders: names.filter((n) => isDir(p + '/' + n)).map((n) => p + '/' + n),
+      };
+    },
     listShims: async () => kids('.claude/agents').filter((n) => n.endsWith('.md')).map((n) => '.claude/agents/' + n),
     listSkillNames: async () => kids(SKILLS_DIR).filter((n) => isDir(SKILLS_DIR + '/' + n)),
     /* The plugin's own desktop logic, over node's fs. */

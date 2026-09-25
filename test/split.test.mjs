@@ -297,6 +297,40 @@ test('mode A: one planted .update file is exactly one attention finding', async 
   assert.equal(att[0].repo, 'mypka');
 });
 
+/* myPKA 6.0.0 ships one entry in every agent's Journal to hold the folder
+   open, under two names (`-first-entry.md`, `-<name>-hired.md`), and neither
+   is an example or a seed. Beside the agent's own entries it is not missing. */
+const JOURNAL = (name, file) => '06 AI Team/Agents/' + name + '/Journal/' + file;
+
+test('RED: mode A, myPKA pass: a journal placeholder beside the agent\'s own entry is not missing; beside only the template it still is', async () => {
+  const root = fixtureA();
+  rmSync(join(root, JOURNAL('Penn', '2026-09-14-first-entry.md')));
+  writeFileSync(join(root, JOURNAL('Penn', '2026-09-20-a-real-lesson.md')), '# A real lesson\n');
+  rmSync(join(root, JOURNAL('Mason', '2026-09-22-mason-hired.md')));
+  writeFileSync(join(root, JOURNAL('Mason', '2026-09-23-another-lesson.md')), '# Another lesson\n');
+  rmSync(join(root, JOURNAL('Charta', '2026-09-14-first-entry.md')));
+  const r = await run(root);
+  const att = by(r, (f) => f.severity === 'attention');
+  assert.equal(att.length, 1, show(att));
+  assert.equal(att[0].path, JOURNAL('Charta', '2026-09-14-first-entry.md'), 'only the template left: still missing');
+  assert.equal(att[0].repo, 'mypka');
+  assert.ok(/latest myPKA/.test(att[0].action), 'copied from the product that ships it');
+});
+
+test('RED: one "Left out on purpose" list covers both passes, content and team', async () => {
+  const root = fixtureA();
+  const content = '04 Inner World/Journal/README.md';
+  const team = JOURNAL('Charta', '2026-09-14-first-entry.md');
+  rmSync(join(root, content));
+  rmSync(join(root, team));
+  const r = await run(root, { leftOut: [content, team] });
+  const bad = by(r, (f) => f.severity !== 'info');
+  assert.deepEqual(bad, [], show(bad));
+  assert.equal(r.health, 'ok');
+  const left = by(r, (f) => f.kind === 'left-out');
+  assert.deepEqual(left.map((f) => f.repo + ' ' + f.path).sort(), ['icor ' + content, 'mypka ' + team]);
+});
+
 test('mode B, content vault: the myPKA side is one info line, "team lives elsewhere", never missing', async () => {
   const root = plantPlugins(materialize(fresh('Bc'), 'icor-for-life'));
   const r = await run(root);
