@@ -899,7 +899,10 @@ async function runChecks(args) {
   /* 5. leftovers: removed or moved upstream after your version, still here.
      Matched by CONTENT when the manifest knows the old file's hash: a file
      that shares the old name but not the old bytes is the user's own, and
-     is reported as a name collision, never as a leftover.
+     is reported as a name collision, never as a leftover. The history
+     records only the LAST shipped hash, so the installed manifest's hash for
+     the same path counts too: a copy of the version this vault installed,
+     untouched, is the scaffold's, not the user's.
 
      THE SPLIT (0.7.0). At 2.0.0 the ICOR for Life builder writes every team
      file it no longer ships into its history as removed, with the old
@@ -941,7 +944,7 @@ async function runChecks(args) {
     if (r.sha256) {
       let have = null;
       try { have = await hash(await fs.readBinary(r.path)); } catch (e) { have = null; }
-      same = have === r.sha256;
+      same = have !== null && (have === r.sha256 || have === localHashes.get(r.path));
     }
     if (same) {
       add('leftover', 'attention', r.path,

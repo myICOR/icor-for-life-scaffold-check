@@ -165,6 +165,38 @@ test('RED: the scaffold\'s OLD bytes under a renamed path are a leftover; the us
   assert.ok(r.findings.filter((x) => x.severity === 'attention').every((x) => x.kind === 'version'));
 });
 
+/* Member report, item E: the removal records only the LAST shipped hash, so
+   a copy of an older shipped version (the one the vault installed) was
+   called "yours, keep it". The installed manifest knows that older hash. */
+test('RED: a leftover byte-identical to the version the vault installed is a leftover, not the member\'s own', async () => {
+  const SCRIPT = '06 AI Team/AI Team Knowledge/Scripts/session-start.sh';
+  const V26 = '#!/bin/sh\n# as shipped in 1.26.0\n';
+  const V28 = '#!/bin/sh\n# as shipped in 1.28.0\n';
+  const remote = remoteManifest({ history: [
+    { version: '1.5.0', date: '2026-09-01', renamed: [], added: [], removed: [{ path: SCRIPT, sha256: sha(V28), note: 'is deleted.' }] },
+  ] });
+  const local = { version: '1.4.2', files: [{ path: SCRIPT, sha256: sha(V26) }] };
+  /* a) the installed version's bytes, untouched: a leftover */
+  let files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files[SCRIPT] = V26;
+  let r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote, local, installedVersion: '1.4.2' });
+  let f = r.findings.find((x) => x.path === SCRIPT);
+  assert.ok(f && f.kind === 'leftover' && f.severity === 'attention', 'the scaffold shipped these bytes: a leftover');
+  /* b) the member's own edit of it: still theirs */
+  files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files[SCRIPT] = V26 + 'echo mine\n';
+  r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote, local, installedVersion: '1.4.2' });
+  f = r.findings.find((x) => x.path === SCRIPT);
+  assert.ok(f && f.kind === 'collision', 'an edited copy stays the member\'s own');
+  /* c) the renamed shape reads the installed hash the same way */
+  const OLD = '06 AI Team/AI Team Knowledge/Guidelines/GL-001-the-six-rooms.md';
+  const renamed = remoteManifest({ history: [
+    { version: '1.5.0', date: '2026-09-01', removed: [], added: [], renamed: [{ from: OLD, to: OLD.replace('GL-001', 'GL-1001'), from_sha256: sha('# newest old bytes\n') }] },
+  ] });
+  files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files[OLD] = '# installed bytes\n';
+  r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote: renamed, local: { version: '1.4.2', files: [{ path: OLD, sha256: sha('# installed bytes\n') }] }, installedVersion: '1.4.2' });
+  f = r.findings.find((x) => x.path === OLD);
+  assert.ok(f && f.kind === 'leftover', 'renamed away, installed bytes untouched: a leftover');
+});
+
 test('RED: a removed file with no hash in the manifest still matches by name (older manifests)', async () => {
   const files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files['.obsidian/snippets/icor-rooms.css'] = 'anything';
   const r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote: remoteManifest(), local: null, installedVersion: '1.4.2' });
