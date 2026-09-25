@@ -510,10 +510,18 @@ function isDescriptor(p) { return DESCRIPTORS.test(String(p)); }
    marker alone. The generator's own source carries the marker as a string
    constant, and so does its test suite; matching on the marker alone
    reported both of them as generated files that had lost their hash, which
-   is a finding a member cannot act on and cannot silence. */
+   is a finding a member cannot act on and cannot silence.
+   And only where the generator writes it: the first line that is not blank,
+   after the frontmatter when there is one. A test suite that builds a header
+   from a format string carries both on one line, deep in its body, and was
+   reported as a generated file that had lost its hash. */
 function generatedHeaderLine(text) {
-  for (const line of String(text).split('\n')) if (line.includes(GEN_MARK) && line.includes('content-hash:')) return line;
-  return null;
+  const lines = String(text).split('\n');
+  let i = 0;
+  if (lines[0] === '---') { const end = lines.indexOf('---', 1); if (end > 0) i = end + 1; }
+  while (i < lines.length && lines[i].trim() === '') i++;
+  const line = lines[i];
+  return line !== undefined && line.includes(GEN_MARK) && line.includes('content-hash:') ? line : null;
 }
 
 /* { header, body } for a generated file, or { header: null } for one this
