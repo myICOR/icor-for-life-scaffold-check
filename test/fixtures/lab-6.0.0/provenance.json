@@ -1,0 +1,66 @@
+{
+  "built": "2026-09-25",
+  "sources": {
+    "icor-for-life": {
+      "path": "<lab>/icor-for-life",
+      "commit": "6aec3b7db71810bf9f71bb19e452e7f2671722f9",
+      "subject": "fix(split): ICOR 2.0.0 manifest rebuilt in the release context (Block 2 FINAL)"
+    },
+    "mypka": {
+      "path": "<lab>/mypka",
+      "commit": "0d57fdf1b3b3ed5081bc548262154e46516aa517",
+      "subject": "fix(split): myPKA 6.0.0 manifest rebuilt in the release context (MIT holder line)"
+    },
+    "scaffold-1.34.1": {
+      "path": "<scaffold>",
+      "commit": "f7dd5f09a2fbe5af20649381fca28de7ce30ab92"
+    }
+  },
+  "stubs": {
+    "icor-for-life": [
+      "06 AI Team/AI Team Knowledge/Brand/icor-for-life-banner-dark-transparent.png",
+      "06 AI Team/AI Team Knowledge/Brand/icor-for-life-banner-dark.png",
+      "06 AI Team/AI Team Knowledge/Brand/icor-for-life-banner-light-transparent.png",
+      "06 AI Team/AI Team Knowledge/Brand/icor-for-life-banner-light.png",
+      "06 AI Team/AI Team Knowledge/Brand/myicor-app-icon-ink.png",
+      "06 AI Team/AI Team Knowledge/Brand/myicor-app-icon-paper.png"
+    ],
+    "mypka": [
+      "06 AI Team/AI Team Knowledge/Avatars/ada.png",
+      "06 AI Team/AI Team Knowledge/Avatars/charta.png",
+      "06 AI Team/AI Team Knowledge/Avatars/flint.png",
+      "06 AI Team/AI Team Knowledge/Avatars/iris.png",
+      "06 AI Team/AI Team Knowledge/Avatars/larry.png",
+      "06 AI Team/AI Team Knowledge/Avatars/mack.png",
+      "06 AI Team/AI Team Knowledge/Avatars/mason.png",
+      "06 AI Team/AI Team Knowledge/Avatars/nolan.png",
+      "06 AI Team/AI Team Knowledge/Avatars/pax.png",
+      "06 AI Team/AI Team Knowledge/Avatars/penn.png",
+      "06 AI Team/AI Team Knowledge/Avatars/silas.png"
+    ],
+    "scaffold-1.34.1": [
+      "06 AI Team/AI Team Knowledge/Avatars/ada.png",
+      "06 AI Team/AI Team Knowledge/Avatars/charta.png",
+      "06 AI Team/AI Team Knowledge/Avatars/flint.png",
+      "06 AI Team/AI Team Knowledge/Avatars/iris.png",
+      "06 AI Team/AI Team Knowledge/Avatars/larry.png",
+      "06 AI Team/AI Team Knowledge/Avatars/mack.png",
+      "06 AI Team/AI Team Knowledge/Avatars/mason.png",
+      "06 AI Team/AI Team Knowledge/Avatars/nolan.png",
+      "06 AI Team/AI Team Knowledge/Avatars/pax.png",
+      "06 AI Team/AI Team Knowledge/Avatars/penn.png",
+      "06 AI Team/AI Team Knowledge/Avatars/silas.png",
+      "06 AI Team/AI Team Knowledge/Brand/icor-for-life-banner-dark-transparent.png",
+      "06 AI Team/AI Team Knowledge/Brand/icor-for-life-banner-dark.png",
+      "06 AI Team/AI Team Knowledge/Brand/icor-for-life-banner-light-transparent.png",
+      "06 AI Team/AI Team Knowledge/Brand/icor-for-life-banner-light.png",
+      "06 AI Team/AI Team Knowledge/Brand/myicor-app-icon-ink.png",
+      "06 AI Team/AI Team Knowledge/Brand/myicor-app-icon-paper.png"
+    ]
+  },
+  "counts": {
+    "icor-for-life": 124,
+    "mypka": 209,
+    "scaffold-1.34.1": 286
+  }
+}

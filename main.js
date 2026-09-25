@@ -168,7 +168,7 @@ function compareCore(a, b) {
 
 /* ------------------------------------------------- manifest shapes ----- */
 /*
- * THE SPLIT (ICOR for Life Scaffold 2.0.0, myPKA 1.0.0). The one scaffold
+ * THE SPLIT (ICOR for Life Scaffold 2.0.0, myPKA 6.0.0). The one scaffold
  * became two products: ICOR for Life (the content vault, `.icor-for-life/`)
  * and myPKA (the AI team, `.mypka/`). Their manifests changed shape while
  * `schema` stayed 1 for a while:

@@ -4,10 +4,10 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [0.7.0] - Unreleased
+## [0.7.0] - 2026-09-25
 
 Reads the split: ICOR for Life Scaffold 2.0.0 (content, `.icor-for-life/`)
-and myPKA 1.0.0 (the AI team, `.mypka/`). Must be live before the Scaffold's
+and myPKA 6.0.0 (the AI team, `.mypka/`). Must be live before the Scaffold's
 2.0.0 reaches `main`: 0.6.0 cannot read the new manifest shape and shows
 "Scaffold: offline" (nothing is deleted).
 
@@ -16,17 +16,18 @@ and myPKA 1.0.0 (the AI team, `.mypka/`). Must be live before the Scaffold's
   2.0.0 the Scaffold's history lists every team file it no longer ships as
   removed, with the old hashes, so an untouched `AGENTS.md` or agent
   contract matched and would have read "Delete it". A path the myPKA
-  manifest ships is now a move, judged in the myPKA section. Only a path in
-  neither product is a leftover (in the lab, `CLAUDE.md` and `GEMINI.md`).
-  Without the myPKA manifest, those removals are not judged, and one line
-  says why.
+  manifest ships, or that the Scaffold's history marks `moved_to: mypka`,
+  is now a move, judged in the myPKA section. Only a path in neither
+  product is a leftover (at 2.0.0: `CLAUDE.md`, `GEMINI.md` and one
+  maintainer script). Without the myPKA manifest, a 2.0.0 removal that does
+  not say where it went is not judged, and one line says why.
 - Both manifest shapes are read: the list of 1.x and the map of 2.0.0, under
   schema 1 or 2. 0.6.0 threw "not a scaffold manifest" on the new one, and
   crashed on a local manifest in the new shape.
 - "Canonical undefined is missing" now names the kind ("Canonical guideline
   is missing"), with the builder's own rules.
-- Example notes are known from the manifest's `examples` list, or from your
-  installed 1.x manifest while the list is not published yet.
+- Example notes are known from the manifest's `examples` list (schema 2),
+  or from the per-file flags of a 1.x manifest.
 - `2.0.0-lab` sorts below `2.0.0`, as the builders sort.
 
 ### Added

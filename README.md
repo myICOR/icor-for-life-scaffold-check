@@ -42,8 +42,8 @@ first works out what this vault holds:
 
 A team file the Scaffold stopped shipping at 2.0.0 because myPKA ships it
 now is a move, not a leftover, and the report never tells you to delete it.
-Until the myPKA manifest URL is set, those files are not judged at all, and
-one line says so.
+Until the myPKA manifest URL is set, a file the Scaffold removed at 2.0.0
+without saying where it went is not judged at all, and one line says so.
 
 ## What the report tells you
 

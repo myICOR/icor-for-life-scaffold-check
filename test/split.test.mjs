@@ -1,28 +1,25 @@
 /* THE SPLIT GATES (0.7.0).
  *
- * ICOR for Life Scaffold 2.0.0 hands the AI team to a second product, myPKA.
- * These tests run the engine against the real lab folders on disk (Flint's
+ * ICOR for Life Scaffold 2.0.0 hands the AI team to a second product, myPKA
+ * 6.0.0. These tests run the engine against the final split lab (Flint's
  * spec, section 6), through a disk-backed vault that answers like the
- * desktop adapter, with the two lab manifests as the remotes. The fixtures
- * are copies in a scratch folder; nothing is ever written inside the lab.
- *
- * The lab lives on the maintainer's machine, not in CI. Without it the lab
- * tests skip and say so; the unit tests at the top run everywhere.
- *   MYPKA_SPLIT_LAB     default ~/Desktop/mypka-split-lab
- *   ICOR_SCAFFOLD_REPO  default ~/projects/icor-for-life-scaffold (for the
- *                       1.34.1 pre-split fixture and the real 2.0.0 history)
- *   SC_MAIN             an alternate main.js, for the mutation runs
+ * desktop adapter, with the two lab manifests as the remotes. The lab is
+ * pinned in this repo (test/fixtures/lab-6.0.0/, rebuilt only by
+ * test/fixtures/build-lab-fixture.mjs), so the gate runs the same on every
+ * machine and in CI, and never reads a live folder. Fixtures are written
+ * into a scratch folder; nothing is written inside the repo.
+ *   SC_MAIN  an alternate main.js, for the mutation runs
  */
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { existsSync, mkdtempSync, cpSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
-import { tmpdir, homedir } from 'node:os';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { diskVault } from './disk-vault.mjs';
+import { labFile, labJson, materialize, provenance } from './lab-fixture.mjs';
 
 const require = createRequire(import.meta.url);
 const { engine } = require(process.env.SC_MAIN ? resolve(process.env.SC_MAIN) : '../main.js');
@@ -153,94 +150,125 @@ test('myPKA machine state is never drift: state/, sources.yaml, expansions/', ()
 
 /* ============================================================ the lab === */
 
-const LAB = process.env.MYPKA_SPLIT_LAB || join(homedir(), 'Desktop', 'mypka-split-lab');
-const SCAFFOLD = process.env.ICOR_SCAFFOLD_REPO || join(homedir(), 'projects', 'icor-for-life-scaffold');
-const PRE_SPLIT_COMMIT = 'f7dd5f0';
-const haveLab = existsSync(join(LAB, 'icor-for-life', '.icor-for-life', 'manifest.json')) && existsSync(join(LAB, 'mypka', '.mypka', 'manifest.json'));
-let haveScaffold = false;
-try { execFileSync('git', ['-C', SCAFFOLD, 'cat-file', '-e', PRE_SPLIT_COMMIT + '^{commit}'], { stdio: 'ignore' }); haveScaffold = true; } catch { haveScaffold = false; }
-const labSkip = haveLab ? false : 'the split lab is not on this machine (' + LAB + ')';
-const preSkip = haveLab && haveScaffold ? false : 'needs the lab and the scaffold repo at ' + PRE_SPLIT_COMMIT;
+/* The final split lab, pinned in this repo: ICOR for Life 2.0.0, myPKA
+   6.0.0 and the pre-split Scaffold 1.34.1 (test/fixtures/lab-6.0.0/, the
+   commits in its provenance.json). Nothing here reads a live folder, so a
+   rebuilt lab can never change what this gate means. Fixtures are written
+   into a scratch folder per test. */
 
-const scratch = haveLab ? mkdtempSync(join(tmpdir(), 'scaffold-check-split-')) : null;
-test.after(() => { if (scratch) rmSync(scratch, { recursive: true, force: true }); });
+const scratch = mkdtempSync(join(tmpdir(), 'scaffold-check-split-'));
+test.after(() => rmSync(scratch, { recursive: true, force: true }));
+
+const PENN = '06 AI Team/Agents/Penn/AGENT.md';
+const RELEASE_GATE = '06 AI Team/AI Team Knowledge/Scripts/release-gate-red-tests.sh';
+/* The three removals the ICOR for Life 2.0.0 changelog names ("Removed:"),
+   in neither product: everything else that left ICOR at 2.0.0 moved to myPKA. */
+const REMOVED_AT_SPLIT = [RELEASE_GATE, 'CLAUDE.md', 'GEMINI.md'];
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
-const noGit = (src) => !/(^|\/)\.git(\/|$)/.test(src.slice(LAB.length));
 
 let seq = 0;
-function copyInto(dst, ...roots) {
-  mkdirSync(dst, { recursive: true });
-  for (const r of roots) cpSync(join(LAB, r), dst, { recursive: true, verbatimSymlinks: true, filter: noGit });
-  return dst;
+const fresh = (tag) => join(scratch, tag + '-' + (++seq));
+const icorRemote = () => labJson('icor-for-life', '.icor-for-life/manifest.json');
+const mypkaRemote = () => labJson('mypka', '.mypka/manifest.json');
+/* The real 2.0.0 history without its `moved_to` marks: the partition alone
+   must keep every team file out (Flint item 1, CRITICAL). */
+function icorRemoteUnmarked() {
+  const m = icorRemote();
+  for (const h of m.history) for (const r of h.removed || []) delete r.moved_to;
+  return m;
 }
 /* A member install: the release zip ships the built plugins, the lab does
-   not (SPLIT-LOG "not taken"). A stand-in manifest per missing plugin makes
-   the fixture the shape a member has; the plugin check then has nothing to
-   say, which is the truth about a real install. */
+   not (SPLIT-LOG "not taken"). A stand-in manifest per plugin the latest
+   ICOR for Life lists makes the fixture the shape a member has. */
 function plantPlugins(root) {
-  const m = readJson(join(root, '.icor-for-life', 'manifest.json'));
-  for (const id of m.plugins || []) {
+  for (const id of icorRemote().plugins || []) {
     const p = join(root, '.obsidian', 'plugins', id, 'manifest.json');
     if (!existsSync(p)) { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, JSON.stringify({ id, version: '0.0.0' })); }
   }
   return root;
 }
-const fixtureA = () => plantPlugins(copyInto(join(scratch, 'A-' + (++seq)), 'icor-for-life', 'mypka'));
+/* A: ICOR for Life 2.0.0 and myPKA 6.0.0, both current. */
+const fixtureA = () => plantPlugins(materialize(fresh('A'), 'icor-for-life', 'mypka'));
+/* M: a 1.34.1 vault after the first half of the documented update
+   (README-myPKA "Coming from ICOR for Life 1.34 or earlier"): myPKA 6.0.0
+   applied over it, ICOR for Life not updated yet. Mode A, ICOR installed
+   1.34.1, so the 2.0.0 removals are live. */
+const fixtureM = () => plantPlugins(materialize(fresh('M'), 'scaffold-1.34.1', 'mypka'));
+/* pre-split: the 1.34.1 Scaffold as it was, no `.mypka/`. */
+const fixturePre = () => materialize(fresh('pre'), 'scaffold-1.34.1');
 
-/* The 1.34.1 manifest, and the 2.0.0 history the ICOR builder writes at the
-   cut: every path 1.34.1 shipped that ICOR 2.0.0 does not, as removed, with
-   its 1.34.1 hash (build-scaffold-manifest.py, the "D" branch). */
-const oldManifest = haveScaffold ? JSON.parse(execFileSync('git', ['-C', SCAFFOLD, 'show', PRE_SPLIT_COMMIT + ':.icor-for-life/manifest.json'], { encoding: 'utf8', maxBuffer: 1 << 26 })) : null;
-function icorRemote() {
-  const m = readJson(join(LAB, 'icor-for-life', '.icor-for-life', 'manifest.json'));
-  if (oldManifest) {
-    const removed = oldManifest.files.filter((f) => !(f.path in m.files)).map((f) => ({ path: f.path, sha256: f.sha256, note: '' }));
-    m.history = [{ version: '2.0.0', date: '2026-10-01', removed, renamed: [], added: [] }];
-  } else {
-    const penn = '06 AI Team/Agents/Penn/AGENT.md';
-    m.history = [{ version: '2.0.0', date: '2026-10-01', removed: [{ path: penn, sha256: sha(readFileSync(join(LAB, 'mypka', penn))), note: '' }], renamed: [], added: [] }];
-  }
-  return m;
-}
-const mypkaRemote = () => readJson(join(LAB, 'mypka', '.mypka', 'manifest.json'));
 const run = (root, extra = {}) => engine.runSuite(Object.assign({ fs: diskVault(root), hash, configDir: '.obsidian', icorRemote: icorRemote(), mypkaRemote: mypkaRemote(), mypkaUrlSet: true }, extra));
 const by = (r, pred) => r.findings.filter(pred);
 const show = (fs) => fs.map((f) => f.repo + ' ' + f.severity + ' ' + f.kind + ' ' + f.path + ' :: ' + f.message).join('\n');
+const leftovers = (r) => by(r, (f) => f.kind === 'leftover' && f.severity === 'attention').map((f) => f.path).sort();
 
-test('CRITICAL, mode A: no path myPKA ships is ever a leftover, under the real 2.0.0 history', { skip: labSkip }, async () => {
-  const remote = icorRemote();
+test('the pinned lab is the final one: ICOR for Life 2.0.0 and myPKA 6.0.0, schema 2', () => {
+  const icor = icorRemote(); const mypka = mypkaRemote();
+  assert.equal(icor.version, '2.0.0'); assert.equal(icor.schema, 2);
+  assert.equal(mypka.version, '6.0.0'); assert.equal(mypka.schema, 2);
+  assert.ok(icor.previous && mypka.previous && Array.isArray(icor.examples) && icor.examples.length > 0);
+  assert.equal(icor.history[0].version, '2.0.0');
+  assert.deepEqual(icor.history[0].removed.filter((r) => !r.moved_to).map((r) => r.path).sort(), REMOVED_AT_SPLIT);
+  assert.equal(labJson('scaffold-1.34.1', '.icor-for-life/manifest.json').version, '1.34.1');
+  for (const t of ['icor-for-life', 'mypka', 'scaffold-1.34.1']) assert.match(provenance.sources[t].commit, /^[0-9a-f]{40}$/);
+});
+
+test('CRITICAL, mode A on 1.34.1: no path myPKA ships is ever a leftover, by the partition alone (moved_to stripped)', async () => {
+  const remote = icorRemoteUnmarked();
   const removed = remote.history[0].removed.map((x) => x.path);
-  assert.ok(removed.includes('06 AI Team/Agents/Penn/AGENT.md'), 'the history really removes Penn with its 1.34.1 hash');
-  const r = await run(fixtureA(), { icorRemote: remote });
+  assert.ok(removed.includes(PENN), 'the 2.0.0 history really removes Penn');
+  const r = await run(fixtureM(), { icorRemote: remote });
   assert.equal(r.mode.name, 'A');
+  assert.equal(r.sections.icor.installedVersion, '1.34.1', 'the 2.0.0 removals are after the installed version, so they are live');
   const mypkaPaths = new Set(Object.keys(mypkaRemote().files));
   const wrong = by(r, (f) => f.repo === 'icor' && (f.kind === 'leftover' || f.kind === 'collision') && mypkaPaths.has(f.path));
   assert.deepEqual(wrong, [], show(wrong));
-  assert.equal(by(r, (f) => f.kind === 'leftover' && f.severity === 'attention').length, 0);
+  assert.deepEqual(leftovers(r), REMOVED_AT_SPLIT);
 });
 
-test('mode A: a planted real leftover (CLAUDE.md, the 1.34.1 bytes) is flagged, and it is the only one', { skip: preSkip }, async () => {
-  const root = fixtureA();
-  writeFileSync(join(root, 'CLAUDE.md'), execFileSync('git', ['-C', SCAFFOLD, 'show', PRE_SPLIT_COMMIT + ':CLAUDE.md']));
-  const r = await run(root);
+test('(a) a 1.34.1 vault: the untouched CLAUDE.md and GEMINI.md are leftovers, and with the maintainer script the only ones', async () => {
+  const r = await run(fixtureM());
   const left = by(r, (f) => f.kind === 'leftover' && f.severity === 'attention');
-  assert.deepEqual(left.map((f) => f.path), ['CLAUDE.md'], show(left));
-  assert.equal(left[0].repo, 'icor');
+  assert.deepEqual(left.map((f) => f.path).sort(), REMOVED_AT_SPLIT, show(left));
+  for (const f of left) { assert.equal(f.repo, 'icor'); assert.equal(f.since, '2.0.0'); }
+  /* "A copy you edited stays yours" (the 2.0.0 changelog): not a leftover */
+  const root = fixtureM();
+  writeFileSync(join(root, 'CLAUDE.md'), '# my own rules\n');
+  const r2 = await run(root);
+  assert.deepEqual(leftovers(r2), [RELEASE_GATE, 'GEMINI.md']);
+  const mine = by(r2, (f) => f.path === 'CLAUDE.md');
+  assert.equal(mine.length, 1, show(mine));
+  assert.equal(mine[0].kind, 'collision'); assert.equal(mine[0].severity, 'info');
 });
 
-test('mode A clean: zero broken, zero attention, agents read from the myPKA manifest', { skip: labSkip }, async () => {
+test('(a) a 2.0.0 vault: a 1.34.1 CLAUDE.md is not reported, because the removal is in the installed version itself', async () => {
+  /* The rule engine.test.mjs pins ("the same file on the installed version
+     is NOT a leftover"). The old lab called itself 2.0.0-lab, which sorts
+     below 2.0.0, so a CLAUDE.md planted there was a leftover; the final lab
+     is 2.0.0. */
+  const root = fixtureA();
+  writeFileSync(join(root, 'CLAUDE.md'), labFile('scaffold-1.34.1', 'CLAUDE.md'));
+  const r = await run(root);
+  assert.equal(r.sections.icor.installedVersion, '2.0.0');
+  assert.deepEqual(by(r, (f) => f.path === 'CLAUDE.md'), []);
+  assert.equal(r.health, 'ok');
+});
+
+test('mode A clean: zero broken, zero attention, agents read from the myPKA manifest', async () => {
   const r = await run(fixtureA());
   const bad = by(r, (f) => f.severity !== 'info');
   assert.deepEqual(bad, [], show(bad));
   assert.equal(r.health, 'ok');
   assert.ok(!r.findings.some((f) => /predates agent identities/.test(f.message)), 'myPKA ships agents; the check reads them');
   assert.ok(!r.findings.some((f) => /undefined/.test(f.message)));
-  assert.equal(r.sections.icor.latestVersion, '2.0.0-lab');
-  assert.equal(r.sections.mypka.installedVersion, '1.0.0-lab');
+  assert.equal(r.sections.icor.latestVersion, '2.0.0');
+  assert.equal(r.sections.icor.installedVersion, '2.0.0');
+  assert.equal(r.sections.mypka.installedVersion, '6.0.0');
+  assert.equal(r.sections.mypka.latestVersion, '6.0.0');
 });
 
-test('mode A: a planted icor-concepts/2 in the installed ICOR manifest is one broken compatibility finding', { skip: labSkip }, async () => {
+test('mode A: a planted icor-concepts/2 in the installed ICOR manifest is one broken compatibility finding', async () => {
   const root = fixtureA();
   const p = join(root, '.icor-for-life', 'manifest.json');
   const m = readJson(p); m.implements = 'icor-concepts/2'; writeFileSync(p, JSON.stringify(m, null, 2));
@@ -251,7 +279,7 @@ test('mode A: a planted icor-concepts/2 in the installed ICOR manifest is one br
   assert.ok(broken[0].message.includes('E_SCHEMA_MISMATCH'));
 });
 
-test('mode A: the latest ICOR outside the installed myPKA range says update myPKA first', { skip: labSkip }, async () => {
+test('mode A: the latest ICOR outside the installed myPKA range says update myPKA first', async () => {
   const remote = icorRemote(); remote.implements = 'icor-concepts/2';
   const r = await run(fixtureA(), { icorRemote: remote });
   const att = by(r, (f) => f.severity === 'attention');
@@ -259,7 +287,7 @@ test('mode A: the latest ICOR outside the installed myPKA range says update myPK
   assert.ok(/Update myPKA before ICOR for Life/.test(att[0].action));
 });
 
-test('mode A: one planted .update file is exactly one attention finding', { skip: labSkip }, async () => {
+test('mode A: one planted .update file is exactly one attention finding', async () => {
   const root = fixtureA();
   writeFileSync(join(root, 'AGENTS.md.update'), 'the next version\n');
   const r = await run(root);
@@ -269,8 +297,8 @@ test('mode A: one planted .update file is exactly one attention finding', { skip
   assert.equal(att[0].repo, 'mypka');
 });
 
-test('mode B, content vault: the myPKA side is one info line, "team lives elsewhere", never missing', { skip: labSkip }, async () => {
-  const root = plantPlugins(copyInto(join(scratch, 'Bc-' + (++seq)), 'icor-for-life'));
+test('mode B, content vault: the myPKA side is one info line, "team lives elsewhere", never missing', async () => {
+  const root = plantPlugins(materialize(fresh('Bc'), 'icor-for-life'));
   const r = await run(root);
   assert.equal(r.mode.name, 'B-content');
   const mine = by(r, (f) => f.repo === 'mypka');
@@ -284,8 +312,8 @@ test('mode B, content vault: the myPKA side is one info line, "team lives elsewh
   assert.ok(engine.renderHarness(h).join('\n').includes('team lives elsewhere'));
 });
 
-test('mode B, team folder opened as a vault: the ICOR side is one info line, "content lives elsewhere"', { skip: labSkip }, async () => {
-  const root = copyInto(join(scratch, 'Bt-' + (++seq)), 'mypka');
+test('mode B, team folder opened as a vault: the ICOR side is one info line, "content lives elsewhere"', async () => {
+  const root = materialize(fresh('Bt'), 'mypka');
   const r = await run(root);
   assert.equal(r.mode.name, 'B-team');
   const mine = by(r, (f) => f.repo === 'icor');
@@ -295,7 +323,7 @@ test('mode B, team folder opened as a vault: the ICOR side is one info line, "co
   assert.equal(await engine.historyWritable(diskVault(root)), false, 'no `.icor-for-life/` is ever created in a team folder');
 });
 
-test('mode A over Obsidian Sync (no dot folders): one Sync line per product, no dot path missing', { skip: labSkip }, async () => {
+test('mode A over Obsidian Sync (no dot folders): one Sync line per product, no dot path missing', async () => {
   const root = fixtureA();
   for (const d of ['.icor-for-life', '.mypka', '.claude', '.codex', '.gemini', '.agents', '.mcp.json', '.github', '.gitignore']) rmSync(join(root, d), { recursive: true, force: true });
   const r = await run(root);
@@ -309,77 +337,85 @@ test('mode A over Obsidian Sync (no dot folders): one Sync line per product, no 
   assert.deepEqual(dotMissing, [], show(dotMissing));
 });
 
-test('pre-split 1.34.1 against the new remotes: no throw, and CLAUDE.md and GEMINI.md are the only leftovers', { skip: preSkip }, async () => {
-  const root = join(scratch, 'pre-' + (++seq));
-  mkdirSync(root, { recursive: true });
-  execFileSync('sh', ['-c', 'git -C "$1" archive "$2" | tar -x -C "$3"', 'sh', SCAFFOLD, PRE_SPLIT_COMMIT, root]);
-  const r = await run(root);
+test('pre-split 1.34.1 against the final remotes: no throw, and the 2.0.0 removals are the only leftovers', async () => {
+  const r = await run(fixturePre());
   assert.equal(r.mode.name, 'A');
   assert.equal(r.mode.preSplit, true);
-  const left = by(r, (f) => f.kind === 'leftover' && f.severity === 'attention').map((f) => f.path).sort();
-  assert.deepEqual(left, ['CLAUDE.md', 'GEMINI.md']);
+  assert.deepEqual(leftovers(r), REMOVED_AT_SPLIT);
   assert.ok(by(r, (f) => f.repo === 'mypka' && f.kind === 'mode' && /before the split/.test(f.message)).length === 1);
   assert.deepEqual(by(r, (f) => f.kind === 'sync'), [], 'a vault that predates `.mypka/` is not a Sync device');
   assert.deepEqual(by(r, (f) => f.repo === 'mypka' && f.kind === 'version'), [], 'the old ICOR manifest is the record of files, never a myPKA version');
   assert.equal(r.mypkaInstalledVersion, null);
   assert.deepEqual(by(r, (f) => f.path.startsWith('.mypka/') && f.severity !== 'info'), [], 'the pre-split line already says to install `.mypka/`');
   assert.ok(!r.findings.some((f) => /undefined/.test(f.message)));
-  const pennMissing = by(r, (f) => f.path === '06 AI Team/Agents/Penn/AGENT.md' && f.severity !== 'info');
-  assert.deepEqual(pennMissing, []);
 });
 
-test('pre-split: a deleted example note is still known as one from the installed 1.34.1 manifest', { skip: preSkip }, async () => {
-  const root = join(scratch, 'pre-' + (++seq));
-  mkdirSync(root, { recursive: true });
-  execFileSync('sh', ['-c', 'git -C "$1" archive "$2" | tar -x -C "$3"', 'sh', SCAFFOLD, PRE_SPLIT_COMMIT, root]);
+test('(c) pre-split: Penn changed between 1.34.1 and myPKA 6.0.0, so an untouched Penn is "safe to update", the same answer `previous` gives', async () => {
+  const r = await run(fixturePre());
+  const penn = by(r, (f) => f.path === PENN);
+  assert.equal(penn.length, 1, show(penn));
+  assert.equal(penn[0].repo, 'mypka');
+  assert.equal(penn[0].severity, 'attention');
+  assert.match(penn[0].message, /^Changed upstream since you installed; your copy is the version you started with\.$/);
+  assert.match(penn[0].action, /Safe: you never edited it/);
+  /* the same verdict mypka-update.py reaches: the 1.34.1 bytes are an older
+     shipped state of the path, not an edit */
+  const old = sha(labFile('scaffold-1.34.1', PENN));
+  const m = mypkaRemote();
+  assert.notEqual(m.files[PENN], old, 'Penn really changed');
+  assert.ok(m.previous[PENN].includes(old), 'myPKA lists the 1.34.1 bytes as shipped');
+  /* and with no borrowed 1.34.1 manifest at all, `previous` alone says the same */
+  const alone = await engine.runChecks({ fs: diskVault(fixturePre()), hash, remote: m, local: null, installedVersion: null, repo: 'mypka', metaDir: '.mypka', product: 'myPKA', agents: false, structure: false, hostLinks: false, quietMissingVersion: true, metaNotInstalled: true });
+  const p2 = alone.findings.find((f) => f.path === PENN);
+  assert.ok(p2 && p2.severity === 'attention' && /older shipped version/.test(p2.message) && /Safe/.test(p2.action), show([p2]));
+});
+
+test('an example note the manifest lists is meant to be deleted: no finding', async () => {
+  const icor = icorRemote();
   const example = '04 Inner World/Contacts/People/Alex Rivera.md';
-  rmSync(join(root, example));
-  /* The fallback lives in the local manifest's list flags; the remote has none. */
-  const localFlags = readJson(join(root, '.icor-for-life', 'manifest.json'));
-  const remote = icorRemote();
-  remote.examples = localFlags.files.filter((f) => f.example).map((f) => f.path);
-  const r = await run(root, { icorRemote: remote });
-  assert.ok(!r.findings.some((f) => f.path === example), 'an example note is meant to be deleted');
+  assert.ok(icor.examples.includes(example));
+  const pre = fixturePre(); rmSync(join(pre, example));
+  assert.ok(!(await run(pre)).findings.some((f) => f.path === example), 'pre-split');
+  const a = fixtureA(); rmSync(join(a, icor.examples[0]));
+  const r = await run(a);
+  assert.deepEqual(by(r, (f) => f.severity !== 'info'), [], 'mode A');
 });
 
-test('no myPKA URL yet: the 2.0.0 removals are not judged, one line says why, nothing is offline', { skip: preSkip }, async () => {
-  const root = fixtureA();
-  writeFileSync(join(root, 'CLAUDE.md'), execFileSync('git', ['-C', SCAFFOLD, 'show', PRE_SPLIT_COMMIT + ':CLAUDE.md']));
-  const r = await run(root, { mypkaRemote: null, mypkaUrlSet: false });
-  assert.equal(by(r, (f) => f.kind === 'leftover' && f.severity === 'attention').length, 0);
+test('(b) no myPKA URL yet, 1.34.1 vault: the 2.0.0 removals are not judged, one line says why, nothing is offline', async () => {
+  const r = await run(fixtureM(), { mypkaRemote: null, mypkaUrlSet: false });
+  assert.deepEqual(leftovers(r), []);
   const why = by(r, (f) => f.repo === 'icor' && f.kind === 'leftover' && f.severity === 'info');
   assert.equal(why.length, 1, show(why));
   assert.ok(/not judged/.test(why[0].message));
+  /* moved_to keeps the 159 team files out; left: the three removals and
+     the renamed noteio.py, which no entry says went anywhere */
+  assert.match(why[0].message, /^4 files /);
   const notChecked = by(r, (f) => f.repo === 'mypka');
-  assert.equal(notChecked.length, 1);
+  assert.equal(notChecked.length, 1, show(notChecked));
   assert.ok(/no myPKA manifest URL/.test(notChecked[0].message));
   assert.notEqual(r.health, 'offline');
+  /* without the marks, every 2.0.0 removal still here is held back, none judged */
+  const r2 = await run(fixtureM(), { icorRemote: icorRemoteUnmarked(), mypkaRemote: null, mypkaUrlSet: false });
+  assert.deepEqual(leftovers(r2), []);
+  const why2 = by(r2, (f) => f.repo === 'icor' && f.kind === 'leftover' && f.severity === 'info');
+  assert.equal(why2.length, 1, show(why2));
+  assert.ok(Number(why2[0].message.split(' ')[0]) > 100, why2[0].message);
 });
 
-test('a myPKA fetch that failed never turns the ICOR result offline; the bar shows the worse of the two', { skip: labSkip }, async () => {
+test('(b) no myPKA URL yet, 2.0.0 vault: nothing was removed after the installed version, so there is nothing to hold back and no line', async () => {
+  const r = await run(fixtureA(), { mypkaRemote: null, mypkaUrlSet: false });
+  assert.deepEqual(by(r, (f) => f.kind === 'leftover'), []);
+  assert.equal(by(r, (f) => f.repo === 'mypka').length, 1);
+});
+
+test('a myPKA fetch that failed never turns the ICOR result offline; the bar shows the worse of the two', async () => {
   const r = await run(fixtureA(), { mypkaRemote: null, mypkaError: 'HTTP 404 fetching the latest manifest' });
   assert.equal(r.sections.icor.status, 'ok');
   assert.equal(r.sections.mypka.status, 'offline');
   assert.equal(r.health, 'offline');
 });
 
-test('schema 2 as Mack is adding it (moved_to, examples): the same answers', { skip: preSkip }, async () => {
-  const icor = icorRemote(); const mypka = mypkaRemote();
-  icor.schema = 2; mypka.schema = 2;
-  for (const x of icor.history[0].removed) if (x.path in mypka.files) x.moved_to = 'mypka';
-  icor.examples = oldManifest.files.filter((f) => f.example && f.path in icor.files).map((f) => f.path);
-  const root = fixtureA();
-  writeFileSync(join(root, 'CLAUDE.md'), execFileSync('git', ['-C', SCAFFOLD, 'show', PRE_SPLIT_COMMIT + ':CLAUDE.md']));
-  rmSync(join(root, icor.examples[0]));
-  const r = await run(root, { icorRemote: icor, mypkaRemote: mypka });
-  const att = by(r, (f) => f.severity !== 'info');
-  assert.deepEqual(att.map((f) => f.path), ['CLAUDE.md'], show(att));
-  /* and with no myPKA manifest at all, moved_to alone keeps the team files out */
-  const r2 = await run(root, { icorRemote: icor, mypkaRemote: null, mypkaUrlSet: false });
-  assert.equal(by(r2, (f) => f.kind === 'leftover' && f.severity === 'attention').length, 0);
-});
-
-test('mode A: a deleted ICOR guideline reads "Canonical guideline is missing" in the ICOR section', { skip: labSkip }, async () => {
+test('mode A: a deleted ICOR guideline reads "Canonical guideline is missing" in the ICOR section', async () => {
   const root = fixtureA();
   const gl = Object.keys(icorRemote().files).find((p) => p.includes('/Guidelines/'));
   rmSync(join(root, gl));
@@ -388,14 +424,14 @@ test('mode A: a deleted ICOR guideline reads "Canonical guideline is missing" in
   assert.ok(f && f.repo === 'icor' && f.message === 'Canonical guideline is missing.' && /ICOR for Life Scaffold/.test(f.action), show([f]));
 });
 
-test('the report carries two sections, the mode and both versions, with no em dash', { skip: labSkip }, async () => {
+test('the report carries two sections, the mode and both versions, with no em dash', async () => {
   const r = await run(fixtureA());
   const md = engine.renderReport(r, { now: new Date('2026-09-24T10:00:00Z'), manifestUrl: 'https://x.test/i.json', mypkaManifestUrl: 'https://x.test/m.json' });
-  for (const s of ['mode: A', 'mypka_installed_version: 1.0.0-lab', 'mypka_latest_version: 1.0.0-lab', '## ICOR for Life (content)', '## myPKA (team)', 'Latest myPKA manifest: https://x.test/m.json', 'myPKA for the myPKA (team) section']) {
+  for (const s of ['mode: A', 'mypka_installed_version: 6.0.0', 'mypka_latest_version: 6.0.0', '## ICOR for Life (content)', '## myPKA (team)', 'Latest myPKA manifest: https://x.test/m.json', 'myPKA for the myPKA (team) section']) {
     assert.ok(md.includes(s), s);
   }
   assert.ok(!/[\u2013\u2014]/.test(md), 'no en or em dash in generated prose');
   const rec = engine.runRecord(r, null, new Date('2026-09-24T10:00:00Z'));
-  assert.equal(rec.repos.mypka.installed, '1.0.0-lab');
+  assert.equal(rec.repos.mypka.installed, '6.0.0');
   assert.equal(engine.parseHistory(JSON.stringify(engine.appendRun(engine.parseHistory(null), rec))).runs.length, 1, 'HISTORY_SCHEMA 1 still reads a record with repos');
 });
