@@ -52,8 +52,13 @@ jobs:
 
   release:
     needs: guard
+    # id-token and attestations: the shared release job attests main.js,
+    # manifest.json and styles.css (myICOR/.github#1). A called workflow gets
+    # no more than its caller grants, so the grant lands here first.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     uses: myICOR/.github/.github/workflows/obsidian-release.yml@main
     with:
       kind: plugin
