@@ -4,6 +4,22 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- **An untouched copy older than the version you installed is not yours.**
+  A removed or renamed file was matched against the last version the
+  Scaffold shipped and the version your vault installed, so a copy older
+  than both was called "yours, keep it". The check now also reads
+  `previous_removed`, the list of every older version of a removed file
+  that the ICOR for Life Scaffold manifest carries from its next release,
+  and reports such a copy as a leftover you can delete. The same holds for
+  a file the Scaffold still ships: a copy that is neither the version you
+  installed nor the latest, but one a release shipped, is reported as an
+  older shipped version that is safe to update, not as your edit. A copy
+  you edited is still yours. With an older manifest nothing changes.
+  Thanks to Brian Carroll (@brijcarroll) for the idea (item E, #7).
+
 ## [0.8.0] - 2026-09-26
 
 ### Added

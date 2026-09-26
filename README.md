@@ -54,7 +54,9 @@ overwritten.
 
 **Leftovers.** Files the Scaffold removed or moved after your version that
 are still sitting in your vault, each pointing at the changelog line that
-says where it went.
+says where it went. A leftover is recognised by its bytes: any version of
+the file a Scaffold release shipped counts, as far as the Scaffold's manifest
+lists them, so an untouched old copy is never called yours.
 
 **Structure.** Whether the rooms exist, whether the plugins your vault expects
 are enabled, and whether every saved view still points at a folder that is

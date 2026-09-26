@@ -120,6 +120,22 @@ test('without an installed manifest, `previous` tells a shipped older copy from 
   assert.ok(b && b.severity === 'info' && b.message === 'You edited this file.');
 });
 
+/* The same gap for a file still shipped: with an installed manifest, a copy
+   that is neither the installed bytes nor the latest was "You edited this
+   file", even when `previous` lists it as bytes a release shipped (a file
+   left behind when the rest was updated by hand). */
+test('RED: with an installed manifest, a copy older than the installed version is an older shipped version, not yours', async () => {
+  const remote = { schema: 2, version: '1.2.0', files: { 'a.md': sha('v3') }, previous: { 'a.md': [sha('v1'), sha('v2')] } };
+  const local = { schema: 2, version: '1.1.0', files: { 'a.md': sha('v2') } };
+  const run = async (text) => (await engine.runChecks({ fs: memVault({ 'a.md': text }), hash, remote, local, installedVersion: '1.1.0', agents: false, structure: false, hostLinks: false })).findings.find((x) => x.path === 'a.md');
+  let f = await run('v1');
+  assert.ok(f && f.severity === 'attention' && /older shipped version/.test(f.message) && /Safe/.test(f.action), 'v1 is bytes a release shipped');
+  f = await run('v2');
+  assert.ok(f && /Changed upstream since you installed/.test(f.message), 'the installed bytes keep their answer');
+  f = await run('v1 edited');
+  assert.ok(f && f.severity === 'info' && /You edited this file, and it also changed upstream/.test(f.message), 'an edit stays yours');
+});
+
 test('a seed is reported only when missing ("add it"), never as changed', async () => {
   const remote = { schema: 1, version: '2.0.0', files: { '.obsidian/workspace.json': sha('shipped'), 'x.md': sha('x') }, seed: ['.obsidian/workspace.json'] };
   const changed = await engine.runChecks({ fs: memVault({ '.obsidian/workspace.json': '{"mine":1}', 'x.md': 'x' }), hash, remote, local: null, installedVersion: '2.0.0', agents: false, structure: false, hostLinks: false });
