@@ -345,6 +345,7 @@ function removalsSince(manifest, installed) {
 /* ---------------------------------------------- agent identities ----- */
 
 const AGENTS_DIR = '06 AI Team/Agents';
+const AVATARS_DIR = '06 AI Team/AI Team Knowledge/Avatars';
 const NIL_ID = '00000000-0000-0000-0000-000000000000';
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const MINT_FIX = 'Run the hiring SOP step (`uuidgen | tr A-Z a-z`, written as `myicor_id`) or `mint-agent-ids.py --map` with the scaffold\'s export. Never invent an id by hand and never copy another agent\'s.';
@@ -640,9 +641,10 @@ async function readContracts(fs) {
  * Rule 1, identity-aware matching of the manifest's shipped agents, and
  * rule 2, the local health of every contract. Returns the set of canonical
  * paths the file check must NOT report as missing, because the agent was
- * found by id somewhere else (its contract, and its shim if one exists at
- * another slug). A manifest without `agents` (older than 1.11.0) runs
- * rule 2 only and says so once.
+ * found by id somewhere else (its contract, the other files of its shipped
+ * folder, its avatar, and its shim if one exists at another slug). A
+ * manifest without `agents` (older than 1.11.0) runs rule 2 only and says
+ * so once.
  */
 async function checkAgents({ fs, remote, add, metaDir, product }) {
   const from = product || 'scaffold';
@@ -667,6 +669,13 @@ async function checkAgents({ fs, remote, add, metaDir, product }) {
           'Shipped agent ' + a.name + ' lives at `' + found.path + '` under your name `' + found.folder + '`; identity intact.',
           'Nothing to do. The scaffold tracks the id, not the folder name; updates to ' + a.name + ' apply to this file.');
         skipMissing.add(a.path);
+        /* the rest of the shipped folder and the shipped avatar (named by the
+           scaffold's `Avatars/<name>.png` convention) went with the rename */
+        const dir = a.path.slice(0, a.path.lastIndexOf('/') + 1);
+        if (dir.startsWith(AGENTS_DIR + '/') && dir.length > AGENTS_DIR.length + 1) {
+          for (const p of remote.files.keys()) if (p.startsWith(dir)) skipMissing.add(p);
+        }
+        if (a.name) skipMissing.add(AVATARS_DIR + '/' + String(a.name).toLowerCase() + '.png');
         if (a.shim && !(await fs.exists(a.shim))) {
           for (const sp of await fs.listShims()) {
             let txt = '';
