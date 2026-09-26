@@ -202,6 +202,65 @@ test('RED: a leftover byte-identical to the version the vault installed is a lef
   assert.ok(f && f.kind === 'leftover', 'renamed away, installed bytes untouched: a leftover');
 });
 
+/* Member report, item E, the remaining gap (Brian Carroll): a copy older
+   than BOTH the last shipped hash and the installed one matched nothing and
+   was called "yours". The ICOR for Life builder now lists every older
+   shipped hash of a removed path in `previous_removed`. */
+test('RED: a leftover older than both the last shipped and the installed version is a leftover when the manifest lists its hash', async () => {
+  const SCRIPT = '06 AI Team/AI Team Knowledge/Scripts/session-start.sh';
+  const V24 = '#!/bin/sh\n# as shipped in 1.24.0\n';
+  const V26 = '#!/bin/sh\n# as shipped in 1.26.0\n';
+  const V28 = '#!/bin/sh\n# as shipped in 1.28.0\n';
+  const history = [{ version: '1.5.0', date: '2026-09-01', renamed: [], added: [], removed: [{ path: SCRIPT, sha256: sha(V28), note: 'is deleted.' }] }];
+  const local = { version: '1.4.2', files: [{ path: SCRIPT, sha256: sha(V26) }] };
+  const run = async (remote, bytes) => {
+    const files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files[SCRIPT] = bytes;
+    const r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote, local, installedVersion: '1.4.2' });
+    return r.findings.find((x) => x.path === SCRIPT);
+  };
+  const withList = remoteManifest({ history, previous_removed: { [SCRIPT]: [sha(V24)] } });
+  /* a) the 1.24.0 bytes, untouched: a leftover */
+  let f = await run(withList, V24);
+  assert.ok(f && f.kind === 'leftover' && f.severity === 'attention', 'bytes a release shipped are a leftover, never yours');
+  /* b) an edit of them: still the member's own */
+  f = await run(withList, V24 + 'echo mine\n');
+  assert.ok(f && f.kind === 'collision' && f.severity === 'info', 'an edited copy stays the member\'s own');
+  /* c) the installed and last shipped hashes still count, as before */
+  assert.equal((await run(withList, V26)).kind, 'leftover');
+  assert.equal((await run(withList, V28)).kind, 'leftover');
+  /* d) a manifest without the key: the old answer, nothing invented */
+  f = await run(remoteManifest({ history }), V24);
+  assert.ok(f && f.kind === 'collision', 'without previous_removed the check cannot know the 1.24.0 bytes');
+  /* e) a junk key is ignored, never a throw */
+  for (const junk of [[sha(V24)], 'x', { [SCRIPT]: sha(V24) }, { [SCRIPT]: [null, 7] }, null]) {
+    f = await run(remoteManifest({ history, previous_removed: junk }), V24);
+    assert.ok(f && f.kind === 'collision', 'junk previous_removed ' + JSON.stringify(junk));
+  }
+});
+
+test('RED: previous_removed covers a path renamed away, and a hash only another history entry names', async () => {
+  const OLD = '06 AI Team/AI Team Knowledge/Guidelines/GL-001-the-six-rooms.md';
+  const run = async (remote, bytes) => {
+    const files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files[OLD] = bytes;
+    const r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote, local: null, installedVersion: '1.4.2' });
+    return r.findings.find((x) => x.path === OLD);
+  };
+  /* a) renamed away: the from-path's older state is listed */
+  const renamed = remoteManifest({ history: [
+    { version: '1.5.0', date: '2026-09-01', removed: [], added: [], renamed: [{ from: OLD, to: OLD.replace('GL-001', 'GL-1001'), from_sha256: sha('# newest\n') }] },
+  ], previous_removed: { [OLD]: [sha('# oldest\n')] } });
+  let f = await run(renamed, '# oldest\n');
+  assert.ok(f && f.kind === 'leftover' && f.message.includes('renamed to'), 'renamed away, older shipped bytes: a leftover');
+  /* b) removed twice: the builder leaves out a hash the earlier removal
+     already names, so the check reads every history entry for the path */
+  const twice = remoteManifest({ history: [
+    { version: '1.5.0', date: '2026-09-01', renamed: [], added: [], removed: [{ path: OLD, sha256: sha('# second life\n'), note: 'is gone again.' }] },
+    { version: '1.4.0', date: '2026-08-01', renamed: [], added: [], removed: [{ path: OLD, sha256: sha('# first life\n'), note: 'is gone.' }] },
+  ], previous_removed: {} });
+  f = await run(twice, '# first life\n');
+  assert.ok(f && f.kind === 'leftover' && f.since === '1.5.0', 'a hash named by the other removal of the path is shipped bytes');
+});
+
 test('RED: a removed file with no hash in the manifest still matches by name (older manifests)', async () => {
   const files = cleanFiles(); files['.icor-for-life/VERSION'] = '1.4.2\n'; files['.obsidian/snippets/icor-rooms.css'] = 'anything';
   const r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote: remoteManifest(), local: null, installedVersion: '1.4.2' });

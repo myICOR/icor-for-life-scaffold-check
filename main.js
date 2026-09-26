@@ -222,6 +222,7 @@ const strings = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string'
  *   files: Map(path -> { path, sha256, kind, example, seed }),
  *   agents: [..] or null, history: [..], historyPresent,
  *   previous: { path: [sha256] } or null, examplesKnown,
+ *   previousRemoved: { path: [sha256] } or null,
  *   rooms, plugins, snippets, bases, implements, requires }
  *
  * `examplesKnown` is false when the manifest says nothing about examples
@@ -272,6 +273,11 @@ function normalizeManifest(raw) {
     history: Array.isArray(raw.history) ? raw.history : [],
     historyPresent: Array.isArray(raw.history),
     previous: raw.previous && typeof raw.previous === 'object' && !Array.isArray(raw.previous) ? raw.previous : null,
+    /* `previous_removed` (ICOR for Life builder, idea: Brian Carroll): the
+       older shipped hashes of paths the release no longer ships, beyond the
+       ones `history` names. Absent from older manifests: null, and the
+       leftover check falls back to the history and installed hashes. */
+    previousRemoved: raw.previous_removed && typeof raw.previous_removed === 'object' && !Array.isArray(raw.previous_removed) ? raw.previous_removed : null,
     rooms: strings(raw.rooms),
     plugins: strings(raw.plugins),
     snippets: Array.isArray(raw.snippets) ? raw.snippets : null,
@@ -933,6 +939,11 @@ async function runChecks(args) {
     if (installedHash && have === installedHash) {
       add('file', 'attention', f.path, 'Changed upstream since you installed; your copy is the version you started with.',
         'Update it from the latest ' + product + '. Safe: you never edited it.', fk);
+    } else if (installedHash && have !== null && older.includes(have)) {
+      /* Not the installed bytes, but bytes an earlier release shipped: a
+         copy that stayed behind when the rest was updated. Never "yours". */
+      add('file', 'attention', f.path, 'An older shipped version: you never edited it.',
+        'Update it from the latest ' + product + '. Safe: your copy is bytes a release shipped.', fk);
     } else if (installedHash && installedHash !== f.sha256) {
       add('file', 'info', f.path, 'You edited this file, and it also changed upstream.',
         'Keep yours. Compare against the latest ' + product + ' by hand if you want the upstream change too. This check never overwrites an edited file.', fk);
@@ -970,7 +981,12 @@ async function runChecks(args) {
      is reported as a name collision, never as a leftover. The history
      records only the LAST shipped hash, so the installed manifest's hash for
      the same path counts too: a copy of the version this vault installed,
-     untouched, is the scaffold's, not the user's.
+     untouched, is the scaffold's, not the user's. A manifest that carries
+     `previous_removed` lists every older shipped hash of the path as well
+     (idea: Brian Carroll), so an untouched copy older than both is a
+     leftover too; the builder leaves out what `history` already names, so
+     every history hash for the path counts. Without the key, the history
+     and installed hashes decide, as before.
 
      THE SPLIT (0.7.0). At 2.0.0 the ICOR for Life builder writes every team
      file it no longer ships into its history as removed, with the old
@@ -993,6 +1009,13 @@ async function runChecks(args) {
   const otherUnknown = args.otherRemote === null || (args.otherRemote !== undefined && !other);
   const splitAt = args.splitVersion || null;
   const unjudged = [];
+  const shipped = new Map();
+  const ship = (p, h) => { if (typeof h === 'string' && h) { if (!shipped.has(p)) shipped.set(p, new Set()); shipped.get(p).add(h); } };
+  for (const h of remote.history) {
+    for (const r of (h && Array.isArray(h.removed) ? h.removed : [])) if (r) ship(r.path, r.sha256);
+    for (const r of (h && Array.isArray(h.renamed) ? h.renamed : [])) if (r) ship(r.from, r.from_sha256);
+  }
+  for (const [p, list] of Object.entries(remote.previousRemoved || {})) if (Array.isArray(list)) for (const h of list) ship(p, h);
   if (repo === 'mypka' && !remote.historyPresent) {
     add('leftover', 'info', metaDir + '/manifest.json',
       'Leftover check: not available for myPKA ' + (latest || '') + '. Its manifest carries no history yet, so a file myPKA removes later cannot be recognised here.',
@@ -1012,7 +1035,7 @@ async function runChecks(args) {
     if (r.sha256) {
       let have = null;
       try { have = await hash(await fs.readBinary(r.path)); } catch (e) { have = null; }
-      same = have !== null && (have === r.sha256 || have === localHashes.get(r.path));
+      same = have !== null && (have === r.sha256 || have === localHashes.get(r.path) || (shipped.has(r.path) && shipped.get(r.path).has(have)));
     }
     if (same) {
       add('leftover', 'attention', r.path,
