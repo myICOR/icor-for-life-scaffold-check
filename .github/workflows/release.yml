@@ -52,9 +52,10 @@ jobs:
 
   release:
     needs: guard
-    # id-token and attestations: the shared release job attests main.js,
-    # manifest.json and styles.css (myICOR/.github#1). A called workflow gets
-    # no more than its caller grants, so the grant lands here first.
+    # id-token and attestations: the shared workflow's separate `provenance`
+    # job (myICOR/.github#1) signs main.js, manifest.json and styles.css
+    # after the release job publishes them. A called workflow gets no more
+    # than its caller grants, so both are granted here.
     permissions:
       contents: write
       id-token: write

@@ -4,6 +4,31 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.1] - 2026-09-26
+
+### Changed
+- **An empty "Latest ICOR for Life manifest URL" now means the default.**
+  Clearing the field used to switch the check off ("no check"); it now
+  reads the default URL the field shows as its placeholder.
+
+### Fixed
+- **The check reads the ICOR for Life manifest from its new home.** The
+  Scaffold repository moved from `TomSolid` to `myICOR` on 2026-09-26. The
+  default manifest URL now names `myICOR/icor-for-life-scaffold`, and a
+  saved setting that is exactly the old default is moved to the new one
+  once, on load. A URL you typed yourself is never changed. GitHub still
+  redirects the old address, so 0.7.0 keeps working meanwhile.
+- **Monospace text follows your Obsidian font.** Without the INKLINE theme,
+  the report and dashboard used a hard-coded font stack; they now fall back
+  to Obsidian's own monospace setting.
+
+### Security
+- **Release assets carry a build-provenance attestation.** `main.js`,
+  `manifest.json` and `styles.css` are attested by the release workflow.
+  Check a download with
+  `gh attestation verify main.js --repo myICOR/icor-for-life-scaffold-check --signer-workflow myICOR/.github/.github/workflows/obsidian-release.yml`
+  (the same for `manifest.json` and `styles.css`).
+
 ## [0.7.0] - 2026-09-25
 
 Reads the split: ICOR for Life Scaffold 2.0.0 (content, `.icor-for-life/`)
