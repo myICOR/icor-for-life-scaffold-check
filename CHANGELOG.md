@@ -4,7 +4,7 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.8.1] - 2026-09-26
 
 ### Fixed
 - **An untouched copy older than the version you installed is not yours.**
