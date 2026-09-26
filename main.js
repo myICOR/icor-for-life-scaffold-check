@@ -2148,6 +2148,30 @@ function migrateToken(settings, store, backend) {
   return true;
 }
 
+/* THE OLD DEFAULT MANIFEST URL (0.7.1). The scaffold repo moved from
+   TomSolid to myICOR, and 0.7.0 and earlier saved the old default into
+   data.json, where it outranks DEFAULTS on every load. A saved value that is
+   EXACTLY the old default moves to the new one, once; anything else is the
+   member's choice and is left alone. Returns true when data.json must be
+   saved. Idempotent. */
+const LEGACY_MANIFEST_URL =
+  'https://raw.githubusercontent.com/TomSolid/icor-for-life-scaffold/main/.icor-for-life/manifest.json';
+function migrateManifestUrl(settings) {
+  const s = settings || {};
+  if (s.manifestUrl !== LEGACY_MANIFEST_URL) return false;
+  s.manifestUrl = DEFAULT_MANIFEST_URL;
+  return true;
+}
+
+/* The URL a check actually reads. A blank field (a member who cleared it)
+   stays blank in data.json, and the check uses the default, the same URL
+   the settings field shows as its placeholder. */
+function effectiveManifestUrl(settings) {
+  return trimmed((settings || {}).manifestUrl) || DEFAULT_MANIFEST_URL;
+}
+
+const manifestSettings = { DEFAULT_MANIFEST_URL, LEGACY_MANIFEST_URL, migrateManifestUrl, effectiveManifestUrl };
+
 const secrets = { SECRET_ID, ENV_KEY, DEFAULT_ENV_FILE, BACKEND_STORE, BACKEND_ENV, readEnvValue, writeEnvValue, resolveBackend, secretStorageUsable, SecretStore, migrateToken, normalizeEnvFilePath, splitKeepingEndings };
 
 /* ======================================================= the plugin ===== */
@@ -2302,6 +2326,7 @@ if (obsidian) {
       this.lastHarness = null;
       this.store = new SecretStore(this.app.secretStorage);
       if (migrateToken(this.settings, this.store, this.backend())) await this.saveData(this.settings);
+      if (migrateManifestUrl(this.settings)) await this.saveData(this.settings);
 
       this.statusEl = this.addStatusBarItem();
       this.statusEl.addClass('icor-scaffold-status');
@@ -2364,7 +2389,7 @@ if (obsidian) {
          that fails never turns the ICOR for Life result offline; the status
          bar shows the worse of the two. */
       let icorRemote = null, icorError = '', mypkaRemote = null, mypkaError = '';
-      try { icorRemote = await this.fetchRemote(this.settings.manifestUrl); } catch (e) { icorError = e.message; }
+      try { icorRemote = await this.fetchRemote(effectiveManifestUrl(this.settings)); } catch (e) { icorError = e.message; }
       const mypkaUrl = (this.settings.mypkaManifestUrl || '').trim();
       if (mypkaUrl) { try { mypkaRemote = await this.fetchRemote(mypkaUrl); } catch (e) { mypkaError = e.message; } }
       if (!icorRemote && !mypkaRemote) {
@@ -2539,7 +2564,7 @@ if (obsidian) {
          setting promises. */
       const today = todayStr();
       const path = normalizePath(folder + '/' + today + '-scaffold-check.md');
-      const text = engine.renderReport(result, { today, manifestUrl: this.settings.manifestUrl, mypkaManifestUrl: this.settings.mypkaManifestUrl, quality: quality || null, harness: harness || null });
+      const text = engine.renderReport(result, { today, manifestUrl: effectiveManifestUrl(this.settings), mypkaManifestUrl: this.settings.mypkaManifestUrl, quality: quality || null, harness: harness || null });
       await fs.write(path, text);
       this.lastReportPath = path;
     }
@@ -2882,3 +2907,4 @@ if (obsidian) {
 }
 module.exports.engine = engine;
 module.exports.secrets = secrets;
+module.exports.manifestSettings = manifestSettings;

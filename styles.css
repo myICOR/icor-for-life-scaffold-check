@@ -26,14 +26,14 @@
   display: flex;
   align-items: center;
   gap: 0.5em;
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   text-transform: uppercase;
   font-weight: 500;
   margin-bottom: 0.25em;
 }
 .icor-scaffold-modal .icor-scaffold-meta {
   color: var(--ink-paper-dim, var(--text-muted));
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   font-size: 0.85em;
 }
 .icor-scaffold-modal ul { padding-left: 1.2em; }
@@ -70,7 +70,7 @@
 }
 .icor-scaffold-dashboard .icor-scaffold-tile-label {
   color: var(--ink-paper-dim, var(--text-muted));
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   font-size: 0.75em;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -80,14 +80,14 @@
   display: flex;
   align-items: center;
   gap: 0.5em;
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   text-transform: uppercase;
   font-weight: 500;
   margin-bottom: 0.25em;
 }
 .icor-scaffold-dashboard .icor-scaffold-meta {
   color: var(--ink-paper-dim, var(--text-muted));
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   font-size: 0.85em;
   overflow-wrap: anywhere;
 }
@@ -117,7 +117,7 @@
   padding: 0.2em 0.6em;
   border-radius: 1em;
   border: 1px solid var(--ink-hairline, var(--background-modifier-border));
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   font-size: 0.85em;
   color: var(--ink-paper-dim, var(--text-muted));
 }
@@ -145,14 +145,14 @@
 }
 .icor-scaffold-metrics th {
   color: var(--ink-paper-dim, var(--text-muted));
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   font-size: 0.8em;
   font-weight: 500;
   text-transform: uppercase;
 }
 .icor-scaffold-metrics td:first-child { white-space: normal; min-width: 10em; }
 .icor-scaffold-metrics .icor-scaffold-num {
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   font-variant-numeric: tabular-nums;
 }
 .icor-scaffold-metrics .icor-scaffold-sevcell {
@@ -172,7 +172,7 @@
   overflow: visible;
 }
 .icor-scaffold-trend-text {
-  font-family: var(--ink-font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-family: var(--ink-font-mono, var(--font-monospace));
   font-size: 0.85em;
   color: var(--ink-paper-dim, var(--text-muted));
 }
