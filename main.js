@@ -585,6 +585,41 @@ function isTemplateName(name) {
   return /^(Agent |_)/.test(String(name || ''));
 }
 
+/* A shipped agent journal ENTRY: `06 AI Team/Agents/<Name>/Journal/<entry>.md`,
+   not the `_template.md` beside it. The scaffold ships one per agent for one
+   reason: version control drops an empty folder, so an entry holds the
+   Journal open until the agent writes its own. Matched on the path, not on
+   one file name, because the scaffold names them more than one way
+   (`<date>-first-entry.md`, `<date>-<name>-hired.md`). */
+const AGENT_JOURNAL_ENTRY = /^06 AI Team\/Agents\/[^/]+\/Journal\/[^/_][^/]*\.md$/;
+function isAgentJournalEntry(p) { return AGENT_JOURNAL_ENTRY.test(String(p)); }
+
+/* True when the entry's Journal folder holds another entry: a `.md` file
+   directly in it that is neither a template (`_...`) nor the entry itself.
+   Then the shipped entry has done its job and is not missing; copying it
+   back would put "nothing yet" beside real entries. An empty folder, a
+   folder with only the template, a missing folder, or an fs that cannot
+   list all answer false, so the entry is reported as before. */
+async function journalHasOwnEntry(fs, entryPath) {
+  if (typeof fs.list !== 'function') return false;
+  const dir = entryPath.slice(0, entryPath.lastIndexOf('/'));
+  const self = entryPath.slice(dir.length + 1);
+  let listed = null;
+  try { listed = await fs.list(dir); } catch { listed = null; }
+  return ((listed && listed.files) || []).some((p) => {
+    const name = String(p).split('/').pop();
+    return name !== self && name.endsWith('.md') && !/^[_.]/.test(name);
+  });
+}
+
+/* The "left out on purpose" setting as a clean list of vault-relative paths.
+   Takes the stored list or the settings text (one path per line); a leading
+   `/` or `./` is dropped, blanks and non-strings are skipped. Never throws. */
+function leftOutPaths(value) {
+  const raw = typeof value === 'string' ? value.split(/\r?\n/) : Array.isArray(value) ? value : [];
+  return raw.filter((p) => typeof p === 'string').map((p) => p.trim().replace(/^(\.?\/)+/, '')).filter(Boolean);
+}
+
 /* Every `06 AI Team/Agents/<Name>/AGENT.md` as { path, folder, name, id },
    where id is the raw frontmatter value (undefined when absent) and name
    is the frontmatter `name` or, failing that, the folder. */
@@ -710,7 +745,11 @@ async function checkAgents({ fs, remote, add, metaDir, product }) {
  *   undefined means "there is no other product", the pre-0.7.0 case),
  *   splitVersion (with otherRemote null: removals at or after it are not
  *   judged), quietMissingVersion (the caller has already said why there is
- *   no version, as in a vault installed before the split).
+ *   no version, as in a vault installed before the split), leftOut (the
+ *   paths the member left out on purpose, the setting; a missing one is
+ *   info, not attention).
+ *   fs.list(dir) -> { files, folders }, when present, says whether an
+ *   agent's Journal already holds entries of its own.
  *
  * Returns { repo, health, installedVersion, latestVersion, findings, counts }.
  * A finding: { kind, severity, path, message, action, repo, since? }.
@@ -723,6 +762,7 @@ async function runChecks(args) {
   const repo = args.repo || 'icor';
   const metaDir = args.metaDir || META_DIR;
   const product = args.product || 'scaffold';
+  const leftOutSet = new Set(leftOutPaths(args.leftOut));
   const findings = [];
   const add = (kind, severity, path, message, action, extra) =>
     findings.push(Object.assign({ kind, severity, path, message, action, repo }, extra || {}));
@@ -811,6 +851,12 @@ async function runChecks(args) {
     if (!exists) {
       if (f.example) continue; /* example notes are meant to be deleted */
       if (foundElsewhere.has(f.path)) continue; /* the agent lives under the member's own name */
+      if (isAgentJournalEntry(f.path) && await journalHasOwnEntry(fs, f.path)) continue; /* the placeholder's job is done */
+      if (leftOutSet.has(f.path)) {
+        add('left-out', 'info', f.path, 'Missing, and listed as left out on purpose in the settings.',
+          'Nothing to do. Take it off the list under Settings, Scaffold Check, Left out on purpose, to have it reported again.', fk);
+        continue;
+      }
       if (f.seed) {
         add('file', 'attention', f.path, 'Canonical ' + f.kind + ' is missing. It is a starting file: it becomes yours after the first install.',
           'Add it: copy it in from the latest ' + product + ' once. After that it is yours to change, and this check never compares it again.', fk);
@@ -1142,13 +1188,15 @@ const HEALTH_RANK = { ok: 0, offline: 1, attention: 2, broken: 3 };
 
 /*
  * runSuite({ fs, hash, configDir, local?, icorRemote, icorError,
- *            mypkaRemote, mypkaError, mypkaUrlSet })
+ *            mypkaRemote, mypkaError, mypkaUrlSet, leftOut })
  *
  * Both products in one pass (0.7.0). Remotes are the parsed latest
  * manifests, either shape; an error is the sentence for why one could not
  * be fetched. `mypkaUrlSet` false means nobody has told this plugin where
  * myPKA is published, which is "not checked", never "offline": the plugin
  * never guesses a URL. `local` is readLocalPairs(fs), read here when absent.
+ * `leftOut` is the one "left out on purpose" list; both passes get it,
+ * since a path belongs to one product only.
  *
  * Returns { suite: true, mode, sections: { icor, mypka }, findings, counts,
  * health, installedVersion, latestVersion, mypkaInstalledVersion,
@@ -1194,7 +1242,7 @@ async function runSuite(args) {
     } else {
       const r = await runChecks({
         fs, hash, configDir, remote: icorRemote, local: local.icor.manifest, installedVersion: icorInstalled,
-        repo: 'icor', metaDir: META_DIR, product: 'ICOR for Life Scaffold',
+        repo: 'icor', metaDir: META_DIR, product: 'ICOR for Life Scaffold', leftOut: args.leftOut,
         agents: false, hostLinks: false, structure: true, syncFold: true,
         otherRemote: mypkaRemote || null, splitVersion: SPLIT_VERSION,
       });
@@ -1224,7 +1272,7 @@ async function runSuite(args) {
            old ICOR manifest is the honest record of what was installed. */
         local: local.mypka.manifest || (mode.preSplit ? local.icor.manifest : null),
         installedVersion: mypkaInstalled,
-        repo: 'mypka', metaDir: MYPKA_DIR, product: 'myPKA',
+        repo: 'mypka', metaDir: MYPKA_DIR, product: 'myPKA', leftOut: args.leftOut,
         /* Before the split there is no `.mypka/` on ANY device, so its
            absence is not Obsidian Sync: no Sync line, and its own files are
            covered by the pre-split line above. */
@@ -1700,8 +1748,8 @@ function renderHarness(h) {
 
 /* The heading a group of findings gets, when the kind's own name is not
    what a person would call it. A kind not in here keeps its own name, which
-   is what every kind did before these three arrived. */
-const KIND_LABELS = { generated: 'Generated harness layer', 'harness-link': 'Host skill links', scratchpad: 'Daily Scratchpad' };
+   is what every kind did before these arrived. */
+const KIND_LABELS = { generated: 'Generated harness layer', 'harness-link': 'Host skill links', scratchpad: 'Daily Scratchpad', 'left-out': 'Left out on purpose' };
 
 /* Findings that say the same "nothing to do" are counted, not listed. On a
    vault with eight agents that is twenty-two lines each saying nothing is
@@ -1984,7 +2032,7 @@ function sparklinePath(values, width, height) {
   }).join(' ');
 }
 
-const engine = { normalizeManifest, kindOf, preRelease, compareCore, parseRequires, parseImplements, tokenAllowedFor, isDescriptor, detectMode, readLocalPair, readLocalPairs, runSuite, historyWritable, countFindings, MYPKA_DIR, CONTENT_ROOMS, SPLIT_VERSION, HARNESS_PATH_OLD, HARNESS_ELSEWHERE, TEAM_ELSEWHERE, CONTENT_ELSEWHERE, MODE_TEXT, TOKEN_HOSTS, localDayStr, todayStr, localDayOfIso, parseVersion, compareVersions, baseFolders, scratchpadProblem, removalsSince, readFrontmatter, isTemplateName, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, generatedState, generatedHeaderLine, isHarnessPath, isPartlyGenerated, isMachineState, parseHarness, loadHarness, harnessFrontmatter, renderHarness, KIND_LABELS, COLLAPSE_SUMMARY, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS, GEN_MARK, GEN_SCRIPT, HARNESS_PATH, HARNESS_SCHEMA, HARNESS_TEXT, HARNESS_TESTED_TEXT, HARNESS_TRUSTED_TEXT, HARNESS_HOST_LABELS, HOST_LINKS_DIR, SKILLS_DIR, NO_HARNESS_DATA };
+const engine = { normalizeManifest, kindOf, preRelease, compareCore, parseRequires, parseImplements, tokenAllowedFor, isDescriptor, detectMode, readLocalPair, readLocalPairs, runSuite, historyWritable, countFindings, MYPKA_DIR, CONTENT_ROOMS, SPLIT_VERSION, HARNESS_PATH_OLD, HARNESS_ELSEWHERE, TEAM_ELSEWHERE, CONTENT_ELSEWHERE, MODE_TEXT, TOKEN_HOSTS, localDayStr, todayStr, localDayOfIso, parseVersion, compareVersions, baseFolders, scratchpadProblem, removalsSince, readFrontmatter, isTemplateName, isAgentJournalEntry, leftOutPaths, runChecks, renderReport, parseQuality, loadQuality, qualityFrontmatter, renderQuality, orderedMetrics, metricValueText, countsText, parseHistory, loadHistory, runRecord, appendRun, metricSeries, sparklinePath, generatedState, generatedHeaderLine, isHarnessPath, isPartlyGenerated, isMachineState, parseHarness, loadHarness, harnessFrontmatter, renderHarness, KIND_LABELS, COLLAPSE_SUMMARY, META_DIR, AGENTS_DIR, NIL_ID, UUID_V4, PLUGIN_ID, QUALITY_PATH, HISTORY_DIR, HISTORY_PATH, QUALITY_SCHEMA, QUALITY_METRIC_IDS, QUALITY_FINDINGS_PER_METRIC, HISTORY_CAP, NO_QUALITY_DATA, SEVERITY_GLYPH, QUALITY_TEXT, QUALITY_COUNT_LABELS, GEN_MARK, GEN_SCRIPT, HARNESS_PATH, HARNESS_SCHEMA, HARNESS_TEXT, HARNESS_TESTED_TEXT, HARNESS_TRUSTED_TEXT, HARNESS_HOST_LABELS, HOST_LINKS_DIR, SKILLS_DIR, NO_HARNESS_DATA };
 
 /* ============================================= where the token lives ===== */
 /*
@@ -2205,6 +2253,9 @@ if (obsidian) {
     runOnStartup: true,
     writeReport: true,
     reportFolder: DEFAULT_REPORT_FOLDER,
+    /* Scaffold paths the member removed on purpose; see leftOutPaths. One
+       list for both products: a path belongs to one of them only. */
+    leftOut: [],
     lastRun: null,
     lastHealth: 'unknown',
   };
@@ -2410,7 +2461,7 @@ if (obsidian) {
       const { fs, local } = await this.readLocal();
       let result;
       try {
-        result = await engine.runSuite({ fs, hash: sha256Hex, configDir: this.app.vault.configDir, local, icorRemote, icorError, mypkaRemote, mypkaError, mypkaUrlSet: !!mypkaUrl });
+        result = await engine.runSuite({ fs, hash: sha256Hex, configDir: this.app.vault.configDir, local, icorRemote, icorError, mypkaRemote, mypkaError, mypkaUrlSet: !!mypkaUrl, leftOut: this.settings.leftOut });
       } catch (e) {
         this.paintStatus('offline');
         if (interactive) new Notice('Scaffold Check failed: ' + e.message);
@@ -2869,6 +2920,9 @@ if (obsidian) {
         .addToggle((t) => t.setValue(s.writeReport).onChange(async (v) => { s.writeReport = v; await save(); }));
       new Setting(c).setName('Report folder')
         .addText((t) => t.setValue(s.reportFolder).setPlaceholder(DEFAULT_REPORT_FOLDER).onChange(async (v) => { s.reportFolder = v.trim() || DEFAULT_REPORT_FOLDER; await save(); }));
+      new Setting(c).setName('Left out on purpose')
+        .setDesc('Files you removed on purpose, from ICOR for Life or from myPKA, one path per line, relative to the vault root. While one is missing, the report lists it under Info as left out instead of as something to do. If the file comes back, it is checked as usual.')
+        .addTextArea((t) => t.setValue(engine.leftOutPaths(s.leftOut).join('\n')).setPlaceholder('04 Inner World/Journal/README.md').onChange(async (v) => { s.leftOut = engine.leftOutPaths(v); await save(); }));
       new Setting(c).setName('Run now').addButton((b) => b.setButtonText('Run the Scaffold Check').setCta().onClick(() => plugin.run({ interactive: true })));
       if (s.lastRun) c.createEl('p', { cls: 'icor-scaffold-meta', text: 'Last run ' + (localDayOfIso(s.lastRun) || s.lastRun) + ' · ' + (STATUS_TEXT[s.lastHealth] || '') });
     }

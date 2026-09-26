@@ -35,6 +35,11 @@ function vault(files, folders = [], links = null) {
     listAgentContracts: async () => Object.keys(files).filter((p) => /^06 AI Team\/Agents\/[^/]+\/AGENT\.md$/.test(p)),
     listShims: async () => Object.keys(files).filter((p) => /^\.claude\/agents\/[^/]+\.md$/.test(p)),
     listScratchpads: async () => Object.keys(files).filter((p) => p.startsWith('00 Daily Scratchpad/')),
+    /* The adapter's shape: the direct children of one folder, as full paths. */
+    list: async (dir) => ({
+      files: Object.keys(files).filter((p) => p.startsWith(dir + '/') && !p.slice(dir.length + 1).includes('/')),
+      folders: [...dirs].filter((p) => p.startsWith(dir + '/') && !p.slice(dir.length + 1).includes('/')),
+    }),
     listSkillNames: async () => Object.keys(files)
       .map((p) => /^06 AI Team\/AI Team Knowledge\/Skills\/([^/]+)\/SKILL\.md$/.exec(p))
       .filter(Boolean).map((m) => m[1]),
@@ -195,6 +200,88 @@ test('three-way: missing canonical file is attention; a missing EXAMPLE note is 
   const gl = r.findings.find((x) => x.kind === 'file' && x.path.endsWith('GL-006-bases-and-live-views.md'));
   assert.ok(gl && gl.severity === 'attention');
   assert.ok(!r.findings.some((x) => x.path.endsWith('Alex Rivera.md')), 'example notes are meant to be deleted');
+});
+
+/* A shipped agent journal entry only holds the Journal folder open, because
+   version control drops an empty folder. Once the agent has written its own
+   entry, the shipped one has done its job; telling the member to copy it back
+   plants "nothing yet" beside real entries. */
+const PENN_JOURNAL = '06 AI Team/Agents/Penn/Journal/';
+const journalManifest = () => remoteManifest({
+  files: remoteManifest().files.concat([
+    { path: PENN_JOURNAL + '_template.md', sha256: sha('template'), kind: 'agent', example: false },
+    { path: PENN_JOURNAL + '2026-09-14-first-entry.md', sha256: sha('placeholder'), kind: 'agent', example: false },
+  ]),
+});
+
+test('RED: a missing journal placeholder is not reported once its Journal folder holds an entry of the agent\'s own', async () => {
+  const files = cleanFiles();
+  files[PENN_JOURNAL + '_template.md'] = 'template';
+  files[PENN_JOURNAL + '2026-09-20-a-real-lesson.md'] = '# A real lesson\n';
+  const r = await run(files, { remote: journalManifest() });
+  assert.ok(!r.findings.some((x) => x.path.endsWith('first-entry.md')), 'the placeholder did its job');
+  assert.equal(r.health, 'ok');
+});
+
+test('RED: a missing journal placeholder IS reported while the folder is empty, holds only the template, or is gone', async () => {
+  const cases = {
+    'only the template': { [PENN_JOURNAL + '_template.md']: 'template' },
+    'the folder is gone': {},
+  };
+  for (const [label, extra] of Object.entries(cases)) {
+    const r = await run(Object.assign(cleanFiles(), extra), { remote: journalManifest() });
+    const f = r.findings.find((x) => x.path.endsWith('first-entry.md'));
+    assert.ok(f && f.kind === 'file' && f.severity === 'attention', label + ': still missing');
+  }
+  /* an empty folder that exists, with nothing in it */
+  const r = await engine.runChecks({ fs: vault(cleanFiles(), cleanFolders.concat([PENN_JOURNAL.slice(0, -1)])), hash, remote: journalManifest(), local: null, installedVersion: '1.5.0' });
+  assert.ok(r.findings.some((x) => x.path.endsWith('first-entry.md') && x.severity === 'attention'), 'empty folder: still missing');
+  /* the template itself is never excused by an entry beside it */
+  const files = cleanFiles();
+  files[PENN_JOURNAL + '2026-09-20-a-real-lesson.md'] = '# A real lesson\n';
+  const t = await run(files, { remote: journalManifest() });
+  assert.ok(t.findings.some((x) => x.path === PENN_JOURNAL + '_template.md' && x.severity === 'attention'), 'a missing template is still missing');
+});
+
+test('RED: an fs without `list` keeps reporting the placeholder, as before', async () => {
+  const files = cleanFiles();
+  files[PENN_JOURNAL + '_template.md'] = 'template';
+  files[PENN_JOURNAL + '2026-09-20-a-real-lesson.md'] = '# A real lesson\n';
+  const fs = vault(files, cleanFolders);
+  delete fs.list;
+  const r = await engine.runChecks({ fs, hash, remote: journalManifest(), local: null, installedVersion: '1.5.0' });
+  assert.ok(r.findings.some((x) => x.path.endsWith('first-entry.md') && x.severity === 'attention'));
+});
+
+/* A file the member left out on purpose is named in the settings. It stays in
+   the report, as info, so the choice is visible and reversible; it no longer
+   counts as something to do. */
+test('RED: a missing file listed as left out on purpose is info, not attention', async () => {
+  const files = cleanFiles();
+  delete files['06 AI Team/AI Team Knowledge/Guidelines/GL-006-bases-and-live-views.md'];
+  const r = await run(files, { leftOut: ['06 AI Team/AI Team Knowledge/Guidelines/GL-006-bases-and-live-views.md'] });
+  const f = r.findings.find((x) => x.path.endsWith('GL-006-bases-and-live-views.md'));
+  assert.ok(f && f.kind === 'left-out' && f.severity === 'info', 'listed, not a to-do');
+  assert.equal(r.counts.attention, 0);
+  assert.equal(r.health, 'ok');
+});
+
+test('left out on purpose: only the listed path, only while it is missing', async () => {
+  const files = cleanFiles();
+  delete files['06 AI Team/AI Team Knowledge/Guidelines/GL-006-bases-and-live-views.md'];
+  delete files['README.md'];
+  files[PENN_PATH] = contract('Penn', ID.penn, 'role: mine\n');
+  const r = await run(files, { leftOut: ['/README.md', PENN_PATH] });
+  assert.ok(r.findings.some((x) => x.path === 'README.md' && x.kind === 'left-out'), 'a leading slash is tolerated');
+  assert.ok(r.findings.some((x) => x.path.endsWith('GL-006-bases-and-live-views.md') && x.severity === 'attention'), 'an unlisted missing file is still attention');
+  assert.ok(!r.findings.some((x) => x.path === PENN_PATH && x.kind === 'left-out'), 'a listed file that is present is checked as usual');
+});
+
+test('leftOutPaths reads a list or the settings text, one path per line, and never throws', () => {
+  assert.deepEqual(engine.leftOutPaths(' a/b.md \n\n./c.md\r\n/d.md\n'), ['a/b.md', 'c.md', 'd.md']);
+  assert.deepEqual(engine.leftOutPaths(['a/b.md', '', 7, null]), ['a/b.md']);
+  assert.deepEqual(engine.leftOutPaths(undefined), []);
+  assert.deepEqual(engine.leftOutPaths({ not: 'a list' }), []);
 });
 
 test('three-way: changed upstream, untouched by the user, is attention (safe to update)', async () => {
