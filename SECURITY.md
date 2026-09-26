@@ -45,8 +45,11 @@ and `manifest.json`. Since 0.2.0, for the agent-identity check: every
 that the scaffold never shipped (only the frontmatter is used, to read
 `myicor_id` and `name`); and `.claude/agents/*.md`, read only in the
 renamed-agent case, to find the shim that points at a shipped agent's
-contract under your own folder name. Hashing runs locally through the Web
-Crypto API. No file content leaves the vault, and nothing from a contract
+contract under your own folder name. Since 0.8.0, when a shipped agent
+journal entry is missing: the names of the files directly in that agent's
+`06 AI Team/Agents/<Name>/Journal/` folder, listed to see whether the agent
+has written an entry of its own; no file in that folder is opened. Hashing
+runs locally through the Web Crypto API. No file content leaves the vault, and nothing from a contract
 or a shim is written anywhere but the report's finding lines, which name
 paths, never content.
 
