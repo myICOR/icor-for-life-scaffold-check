@@ -4,6 +4,45 @@ All notable changes to ICOR for Life - Scaffold Check.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.8.0] - 2026-09-26
+
+### Added
+- **A setting for files you left out on purpose.** "Left out on purpose"
+  takes vault-relative paths, one per line, from ICOR for Life or from
+  myPKA. While a listed file is missing, the report lists it as info,
+  left out, instead of as something to do. If the file comes back, it is
+  checked as usual. The list is empty by default, so nothing changes until
+  you fill it. A path pasted with backslashes, as on Windows, matches too.
+  Thanks to @agilley7 for the setting (#6, closes #5).
+
+### Fixed
+- **A journal placeholder is not reported missing beside real entries.**
+  Every shipped agent carries one placeholder entry in its `Journal/`
+  folder only to keep the folder in place. When that placeholder is
+  missing but the folder holds entries of the agent's own, it is no longer
+  reported as a missing canonical file. To tell, the check lists the file
+  names in that one folder; it opens none of them (`SECURITY.md`, Reads).
+  An empty folder, or no folder, is still reported. Thanks to @agilley7
+  for the fix (#6, closes #5).
+- **A renamed shipped agent's companion files are not reported missing.**
+  When a shipped agent lives under a folder name of your own, the other
+  files of its shipped folder and its avatar are skipped by the
+  missing-file check, as its contract and shim already were. Thanks to
+  Mohammad Yama Azimi (@myamaazimi) for the fix (#4, closes #3).
+- **An untouched copy of the version you installed is a leftover, not
+  yours.** A removed or renamed file was matched only against the last
+  version the Scaffold shipped, so an untouched copy from an older install
+  was called "yours, keep it". It now also matches the version your vault
+  installed, and is reported as a leftover you can delete. A copy you
+  edited is still yours. Thanks to Brian Carroll (@brijcarroll) for the
+  fix (#8, closes #7).
+- **A header quoted inside a script is not a header.** A script that
+  builds a generated-file header from a format string was reported as a
+  generated file that lost its hash, with a fix that could not clear it.
+  The header is now read only where the generator writes it: the first
+  non-blank line, after the frontmatter. Thanks to @pk-smithb for the fix
+  (#10, closes #9).
+
 ## [0.7.1] - 2026-09-26
 
 ### Changed

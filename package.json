@@ -1,6 +1,6 @@
 {
   "name": "icor-for-life-scaffold-check",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "scripts": {
     "test": "node --test test/*.test.mjs"
