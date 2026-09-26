@@ -630,7 +630,7 @@ async function checkAgents({ fs, remote, add, metaDir, product }) {
            scaffold's `Avatars/<name>.png` convention) went with the rename */
         const dir = a.path.slice(0, a.path.lastIndexOf('/') + 1);
         if (dir.startsWith(AGENTS_DIR + '/') && dir.length > AGENTS_DIR.length + 1) {
-          for (const f of remote.files || []) if (f && f.path && f.path.startsWith(dir)) skipMissing.add(f.path);
+          for (const p of remote.files.keys()) if (p.startsWith(dir)) skipMissing.add(p);
         }
         if (a.name) skipMissing.add(AVATARS_DIR + '/' + String(a.name).toLowerCase() + '.png');
         if (a.shim && !(await fs.exists(a.shim))) {
