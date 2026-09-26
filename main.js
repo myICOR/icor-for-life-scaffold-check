@@ -614,11 +614,16 @@ async function journalHasOwnEntry(fs, entryPath) {
 }
 
 /* The "left out on purpose" setting as a clean list of vault-relative paths.
-   Takes the stored list or the settings text (one path per line); a leading
-   `/` or `./` is dropped, blanks and non-strings are skipped. Never throws. */
+   Takes the stored list or the settings text (one path per line). Each path
+   gets the two steps Obsidian's normalizePath does, so it can match the
+   manifest's: a backslash becomes `/` (a path pasted on Windows) and the
+   text is NFC (a name copied from a macOS file name). Then a leading `/`
+   or `./` is dropped, blanks and non-strings are skipped. Never throws. */
 function leftOutPaths(value) {
   const raw = typeof value === 'string' ? value.split(/\r?\n/) : Array.isArray(value) ? value : [];
-  return raw.filter((p) => typeof p === 'string').map((p) => p.trim().replace(/^(\.?\/)+/, '')).filter(Boolean);
+  return raw.filter((p) => typeof p === 'string')
+    .map((p) => p.trim().replace(/\\/g, '/').normalize('NFC').replace(/^(\.?\/)+/, ''))
+    .filter(Boolean);
 }
 
 /* Every `06 AI Team/Agents/<Name>/AGENT.md` as { path, folder, name, id },
@@ -2933,7 +2938,7 @@ if (obsidian) {
       new Setting(c).setName('Report folder')
         .addText((t) => t.setValue(s.reportFolder).setPlaceholder(DEFAULT_REPORT_FOLDER).onChange(async (v) => { s.reportFolder = v.trim() || DEFAULT_REPORT_FOLDER; await save(); }));
       new Setting(c).setName('Left out on purpose')
-        .setDesc('Files you removed on purpose, from ICOR for Life or from myPKA, one path per line, relative to the vault root. While one is missing, the report lists it under Info as left out instead of as something to do. If the file comes back, it is checked as usual.')
+        .setDesc('Files you removed on purpose, from ICOR for Life or from myPKA, one path per line, relative to the vault root. While one is missing, the report lists it as info, left out, instead of as something to do. If the file comes back, it is checked as usual.')
         .addTextArea((t) => t.setValue(engine.leftOutPaths(s.leftOut).join('\n')).setPlaceholder('04 Inner World/Journal/README.md').onChange(async (v) => { s.leftOut = engine.leftOutPaths(v); await save(); }));
       new Setting(c).setName('Run now').addButton((b) => b.setButtonText('Run the Scaffold Check').setCta().onClick(() => plugin.run({ interactive: true })));
       if (s.lastRun) c.createEl('p', { cls: 'icor-scaffold-meta', text: 'Last run ' + (localDayOfIso(s.lastRun) || s.lastRun) + ' · ' + (STATUS_TEXT[s.lastHealth] || '') });
