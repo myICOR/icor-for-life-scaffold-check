@@ -316,6 +316,12 @@ test('leftOutPaths reads a list or the settings text, one path per line, and nev
   assert.deepEqual(engine.leftOutPaths({ not: 'a list' }), []);
 });
 
+test('leftOutPaths normalizes a Windows backslash path and NFD text before matching', () => {
+  /* a path pasted on Windows, with a leading dot-backslash, and a name in NFD as a macOS file name gives it */
+  assert.deepEqual(engine.leftOutPaths('.\\06 AI Team\\Agents\\Pax\\Journal\\first.md\nNotes/Cafe\u0301.md'),
+    ['06 AI Team/Agents/Pax/Journal/first.md', 'Notes/Caf\u00e9.md']);
+});
+
 test('three-way: changed upstream, untouched by the user, is attention (safe to update)', async () => {
   const files = cleanFiles();
   files['README.md'] = 'old readme';
