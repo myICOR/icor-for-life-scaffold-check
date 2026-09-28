@@ -403,11 +403,32 @@ const SCRATCHPAD_SHAPES = [
   /^Untitled( \d+)?\.md$/,                          // subject note, not yet named
   /^\d{4}-\d{2}-\d{2}_canvas([-_ ].*)?\.canvas$/,  // toolbar canvas
 ];
+const SCRATCHPAD_CANVAS_CUTOFF = '2026-09-10';
+
+function isGrandfatheredScratchpadMarkdown(name, text) {
+  if (!name.endsWith('.md')) return false;
+  const frontmatter = readFrontmatter(text);
+  return frontmatter.type === 'scratchpad' && frontmatter.processed === 'true';
+}
+
+function isValidIsoDay(day) {
+  if (!ISO_DAY_RE.test(day)) return false;
+  const parts = day.split('-').map(Number);
+  const parsed = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  return parsed.getUTCFullYear() === parts[0]
+    && parsed.getUTCMonth() === parts[1] - 1
+    && parsed.getUTCDate() === parts[2];
+}
+
+function isGrandfatheredScratchpadCanvas(name) {
+  const match = /^(\d{4}-\d{2}-\d{2})_canvas(?:[-_ ].*)?\.canvas$/.exec(name);
+  return !!match && isValidIsoDay(match[1]) && match[1] <= SCRATCHPAD_CANVAS_CUTOFF;
+}
 
 /* Returns null when the path is fine, or the reason it is not. A `.base` is a
    saved view of the whole room and belongs at its root, so it is judged on
    placement rather than on its name. */
-function scratchpadProblem(path) {
+function scratchpadProblem(path, text = '') {
   const rel = path.slice(SCRATCHPAD_ROOT.length + 1);
   const parts = rel.split('/');
   const name = parts[parts.length - 1];
@@ -415,6 +436,7 @@ function scratchpadProblem(path) {
   if (name.endsWith('.base')) {
     return parts.length === 1 ? null : 'nesting-base';
   }
+  if (parts.length === 1 && (isGrandfatheredScratchpadMarkdown(name, text) || isGrandfatheredScratchpadCanvas(name))) return null;
   if (parts.length !== 3 || !/^\d{4}$/.test(parts[0]) || !/^\d{2}$/.test(parts[1])) return 'nesting';
   return SCRATCHPAD_SHAPES.some((re) => re.test(name)) ? null : 'name';
 }
@@ -1096,7 +1118,10 @@ async function runChecks(args) {
        per file and a single "the room is untidy" line tells you nothing about
        which one to move. */
     for (const path of await fs.listScratchpads()) {
-      const problem = scratchpadProblem(path);
+      const rel = path.slice(SCRATCHPAD_ROOT.length + 1);
+      const rootMarkdown = !rel.includes('/') && rel.endsWith('.md')
+        && rel !== 'README.md' && rel !== 'INDEX.md' && rel !== '_template.md';
+      const problem = scratchpadProblem(path, rootMarkdown ? await fs.read(path) : '');
       if (!problem) continue;
       if (problem === 'nesting-base') {
         add('scratchpad', 'attention', path, 'A saved view belongs at the root of `' + SCRATCHPAD_ROOT + '`, not inside a dated folder.',

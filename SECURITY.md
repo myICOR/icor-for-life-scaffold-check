@@ -49,7 +49,9 @@ contract under your own folder name. Since 0.8.0, when a shipped agent
 journal entry is missing: the names of the files directly in that agent's
 `06 AI Team/Agents/<Name>/Journal/` folder, listed to see whether the agent
 has written an entry of its own; no file in that folder is opened. Hashing
-runs locally through the Web Crypto API. No file content leaves the vault, and nothing from a contract
+runs locally through the Web Crypto API. Root-level Daily Scratchpad
+Markdown candidates are opened locally, and only their first frontmatter
+block is parsed for `type` and `processed`. No file content leaves the vault, and nothing from a contract
 or a shim is written anywhere but the report's finding lines, which name
 paths, never content.
 
