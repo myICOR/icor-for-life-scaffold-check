@@ -968,6 +968,25 @@ test('RED: a partly nested scratchpad (year but no month) is found', async () =>
   assert.ok(r.findings.some((x) => x.kind === 'scratchpad' && x.message.includes('YYYY/MM/')));
 });
 
+test('grandfathered root scratchpads pass, while invalid residues still fail', async () => {
+  const files = cleanFiles();
+  files['00 Daily Scratchpad/2026-09-08.md'] = '---\ntype: note\nprocessed: true\n---\nwrong type\n';
+  files['00 Daily Scratchpad/2026-09-09.md'] = '---\ntype: scratchpad\nprocessed: false\n---\nunprocessed\n';
+  files['00 Daily Scratchpad/2026-09-10.md'] = '---\ntype: scratchpad\nprocessed: true\n---\ngrandfathered\n';
+  files['00 Daily Scratchpad/2026-09-09_canvas.canvas'] = '{}\n';
+  files['00 Daily Scratchpad/2026-09-10_canvas - legacy.canvas'] = '{}\n';
+  files['00 Daily Scratchpad/2026-09-11_canvas.canvas'] = '{}\n';
+  files['00 Daily Scratchpad/2026-02-30_canvas.canvas'] = '{}\n';
+  const r = await engine.runChecks({ fs: vault(files, cleanFolders), hash, remote: remoteManifest(), local: null, installedVersion: '1.5.0' });
+  const found = r.findings.filter((x) => x.kind === 'scratchpad').map((x) => x.path).sort();
+  assert.deepEqual(found, [
+    '00 Daily Scratchpad/2026-02-30_canvas.canvas',
+    '00 Daily Scratchpad/2026-09-08.md',
+    '00 Daily Scratchpad/2026-09-09.md',
+    '00 Daily Scratchpad/2026-09-11_canvas.canvas',
+  ]);
+});
+
 test('RED: a saved view buried in a dated folder is found; at the room root it is fine', async () => {
   const buried = cleanFiles();
   buried['00 Daily Scratchpad/2026/09/Recent Notes.base'] = 'filters:\n  and:\n    - file.ext == "md"\n';
@@ -997,8 +1016,8 @@ test('GREEN: every shape the real tools produce passes, so the check cannot be s
 });
 
 test('the shape matcher is judged on its own, one case per rule', () => {
-  const ok = (p) => assert.equal(engine.scratchpadProblem(p), null, p + ' should pass');
-  const bad = (p, why) => assert.equal(engine.scratchpadProblem(p), why, p + ' should fail as ' + why);
+  const ok = (p, text = '') => assert.equal(engine.scratchpadProblem(p, text), null, p + ' should pass');
+  const bad = (p, why, text = '') => assert.equal(engine.scratchpadProblem(p, text), why, p + ' should fail as ' + why);
   ok('00 Daily Scratchpad/2026/09/2026-09-10.md');
   ok('00 Daily Scratchpad/2026/09/202609101200.md');
   ok('00 Daily Scratchpad/2026/09/202609101200 - A Title.md');
@@ -1007,6 +1026,12 @@ test('the shape matcher is judged on its own, one case per rule', () => {
   ok('00 Daily Scratchpad/2026/09/2026-09-10_canvas.canvas');
   ok('00 Daily Scratchpad/README.md');
   ok('00 Daily Scratchpad/2026/09/README.md');
+  ok('00 Daily Scratchpad/2026-09-10.md', '---\ntype: scratchpad\nprocessed: true\n---\nkept in place\n');
+  ok('00 Daily Scratchpad/2026-09-10_canvas.canvas');
+  bad('00 Daily Scratchpad/2026-09-08.md', 'nesting', '---\ntype: note\nprocessed: true\n---\nwrong type\n');
+  bad('00 Daily Scratchpad/2026-09-09.md', 'nesting', '---\ntype: scratchpad\nprocessed: false\n---\nunprocessed\n');
+  bad('00 Daily Scratchpad/2026-09-11_canvas.canvas', 'nesting');
+  bad('00 Daily Scratchpad/2026-02-30_canvas.canvas', 'nesting');
   bad('00 Daily Scratchpad/2026-09-10.md', 'nesting');
   bad('00 Daily Scratchpad/2026/2026-09-10.md', 'nesting');
   bad('00 Daily Scratchpad/2026/09/10/2026-09-10.md', 'nesting');
